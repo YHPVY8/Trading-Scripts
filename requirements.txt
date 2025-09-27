@@ -1,6 +1,3 @@
-streamlit==1.50.0
-pandas==2.3.2
-supabase==2.20.0
-numpy
-altair
-streamlit-aggrid==1.1.8.post1
+dash
+pandas
+supabase
