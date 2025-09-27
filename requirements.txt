@@ -4,3 +4,4 @@ supabase
 numpy
 altair
 streamlit-aggrid
+st-aggrid
