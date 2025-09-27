@@ -1,3 +1,4 @@
-dash
+streamlit
 pandas
 supabase
+numpy
