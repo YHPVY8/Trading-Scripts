@@ -1,7 +1,6 @@
 import streamlit as st
 from supabase import create_client
 import pandas as pd
-import runpy
 
 st.title("Trading Dashboard")
 
@@ -21,17 +20,18 @@ if section == "Source Data":
         ["daily_es", "es_weekly", "es_30m", "es_2hr", "es_4hr"]
     )
 
-    # show latest 10,000 rows (adjust limit as needed)
-    rows = sb.table(table).select("*").limit(10000).execute()
+    # fetch a bigger chunk — adjust limit if needed
+    rows = sb.table(table).select("*").limit(50000).execute()
     data = pd.DataFrame(rows.data)
 
     if not data.empty:
         st.dataframe(
             data,
-            use_container_width=True,
+            use_container_width=True,   # full screen width
             hide_index=True,
-            height=600  # scrollable like a spreadsheet
+            height=600                  # scrollable like a spreadsheet
         )
+        st.caption(f"Showing {len(data)} rows (adjust limit in code if needed).")
     else:
         st.warning("No data found.")
 
@@ -39,23 +39,17 @@ if section == "Source Data":
 elif section == "Pivots":
     st.header("Daily Pivots")
 
-    if st.button("Run Daily Pivots"):
-        st.info("Running Supabase_Daily_Pivots.py ...")
-        try:
-            # Run the pivot script
-            runpy.run_path("Supabase_Daily_Pivots.py")
-            st.success("Pivot script executed ✅")
+    # Directly show the pivots table from Supabase
+    rows = sb.table("es_daily_pivot_levels").select("*").execute()
+    pivots = pd.DataFrame(rows.data)
 
-            # --- Show pivots if your script outputs a CSV ---
-            try:
-                pivots = pd.read_csv("daily_pivots.csv")  # adjust filename if needed
-                st.dataframe(
-                    pivots,
-                    use_container_width=True,
-                    hide_index=True,
-                    height=600
-                )
-            except FileNotFoundError:
-                st.info("Pivot script ran, but no CSV found. Make sure the script saves one.")
-        except Exception as e:
-            st.error(f"Error running pivots: {e}")
+    if not pivots.empty:
+        st.dataframe(
+            pivots,
+            use_container_width=True,
+            hide_index=True,
+            height=600
+        )
+        st.caption(f"Showing {len(pivots)} rows from es_daily_pivot_levels.")
+    else:
+        st.warning("No pivot data found in es_daily_pivot_levels.")
