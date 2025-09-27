@@ -4,35 +4,53 @@ from supabase import create_client
 
 # ---------- Page setup ----------
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
-
 st.title("Trading Dashboard")
 
-# ---- Connect to Supabase ----
+# ---------- Connect to Supabase ----------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ---- Sidebar Navigation ----
-section = st.sidebar.radio("Go to", ["Source Data", "Pivots"])
-
-def load_table(table_name, limit=1000):
-    """Fetch last N rows sorted by time desc, then return ascending for normal reading."""
+# ---------- Helper Functions ----------
+def load_table(table_name, limit=1000, date_col="time"):
+    """Fetch last `limit` rows ordered by date_col descending, then re-sort ascending."""
     rows = (
         sb.table(table_name)
         .select("*")
-        .order("time", desc=True)
+        .order(date_col, desc=True)
         .limit(limit)
         .execute()
     )
     df = pd.DataFrame(rows.data)
     if not df.empty:
-        df = df.sort_values("time")
+        # Sort ascending so most recent ends at bottom
+        df = df.sort_values(date_col)
+        # Drop id column if present
+        if "id" in df.columns:
+            df = df.drop(columns=["id"])
     return df
 
 def format_numbers(df):
-    for col in df.select_dtypes(include=["float","int"]).columns:
+    """Round floats to 2 decimals."""
+    for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
         df[col] = df[col].round(2)
     return df
+
+def highlight_hits(val, col):
+    """Highlight True/✓ in hit columns."""
+    if col.lower().startswith("hit") and (val is True or str(val).lower() == "true" or val == "✓"):
+        return "background-color: #98FB98"
+    return ""
+
+def styled_dataframe(df):
+    hit_cols = [c for c in df.columns if c.lower().startswith("hit")]
+    return df.style.apply(
+        lambda s: [highlight_hits(v, s.name) for v in s],
+        axis=0
+    )
+
+# ---------- Sidebar Navigation ----------
+section = st.sidebar.radio("Go to", ["Source Data", "Pivots"])
 
 # ========== SOURCE DATA ==========
 if section == "Source Data":
@@ -41,7 +59,7 @@ if section == "Source Data":
         "Select a table",
         ["daily_es", "es_weekly", "es_30m", "es_2hr", "es_4hr"]
     )
-    data = load_table(table)
+    data = load_table(table, limit=1000, date_col="time")
     if not data.empty:
         data = format_numbers(data)
         st.dataframe(
@@ -56,21 +74,11 @@ if section == "Source Data":
 # ========== PIVOTS ==========
 elif section == "Pivots":
     st.header("Daily Pivots")
-    pivots = load_table("es_daily_pivot_levels")
+    pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
     if not pivots.empty:
         pivots = format_numbers(pivots)
-        # Light green highlight for hit columns
-        hit_cols = [c for c in pivots.columns if c.lower().startswith("hit")]
-        def highlight_hits(val, col):
-            if col in hit_cols and (val is True or str(val).lower() == "true" or val == "✓"):
-                return "background-color: #98FB98"
-            return ""
-        styled = pivots.style.apply(
-            lambda s: [highlight_hits(v, s.name) for v in s],
-            axis=0
-        )
         st.dataframe(
-            styled,
+            styled_dataframe(pivots),
             width="stretch",
             hide_index=True,
             height=600
