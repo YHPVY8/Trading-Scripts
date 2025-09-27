@@ -3,3 +3,4 @@ pandas
 supabase
 numpy
 altair
+runpy
