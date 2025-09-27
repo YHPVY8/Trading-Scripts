@@ -75,9 +75,23 @@ elif section == "Pivots":
     st.header("Daily Pivots")
     pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
     if not pivots.empty:
-        pivots = format_numbers(pivots)
+        # Round every numeric column to 2 decimals for display
+        num_cols = pivots.select_dtypes(include=['float', 'float64', 'int']).columns
+        pivots[num_cols] = pivots[num_cols].round(2)
+
+        # Style hit columns with green background
+        def highlight_hits(val, col):
+            if col.lower().startswith("hit") and (val is True or str(val).lower() == "true" or val == "✓"):
+                return "background-color: #98FB98"
+            return ""
+
+        styled = pivots.style.apply(
+            lambda s: [highlight_hits(v, s.name) for v in s],
+            axis=0
+        )
+
         st.dataframe(
-            styled_dataframe(pivots),
+            styled,
             width="stretch",
             hide_index=True,
             height=600
