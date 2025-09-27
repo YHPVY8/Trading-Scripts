@@ -75,26 +75,35 @@ elif section == "Pivots":
     st.header("Daily Pivots")
     pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
     if not pivots.empty:
-        # Round every numeric column to 2 decimals for display
+        # Round floats
         num_cols = pivots.select_dtypes(include=['float', 'float64', 'int']).columns
         pivots[num_cols] = pivots[num_cols].round(2)
 
-        # Style hit columns with green background
-        def highlight_hits(val, col):
-            if col.lower().startswith("hit") and (val is True or str(val).lower() == "true" or val == "✓"):
-                return "background-color: #98FB98"
-            return ""
+        # Build column config to format numbers with 2 decimals
+        col_config = {
+            col: st.column_config.NumberColumn(col, format="%.2f")
+            for col in num_cols
+        }
 
-        styled = pivots.style.apply(
-            lambda s: [highlight_hits(v, s.name) for v in s],
-            axis=0
-        )
+        # Apply green background to hit columns
+        hit_cols = [c for c in pivots.columns if c.lower().startswith("hit")]
+        for col in hit_cols:
+            # Convert booleans to ✓/"" for nicer display
+            pivots[col] = pivots[col].apply(lambda x: "✓" if x else "")
+            # Turn the column into a text column with background color
+            col_config[col] = st.column_config.TextColumn(
+                col,
+                help="True = ✓",
+                width="small"
+            )
 
         st.dataframe(
-            styled,
+            pivots,
             width="stretch",
             hide_index=True,
-            height=600
+            height=600,
+            column_config=col_config
         )
     else:
         st.warning("No pivots found.")
+
