@@ -100,7 +100,10 @@ df_results = pd.DataFrame(results)
 
 # Insert new rows
 if not df_results.empty:
-    supabase.table("es_daily_pivot_levels").insert(df_results.to_dict(orient="records")).execute()
-    print(f"Inserted {len(df_results)} rows into es_daily_pivot_levels.")
+    supabase.table("es_daily_pivot_levels") \
+        .upsert(df_results.to_dict(orient="records"), on_conflict=["date"]) \
+        .execute()
+    print(f"Upserted {len(df_results)} rows into es_daily_pivot_levels.")
 else:
     print("No data to insert.")
+
