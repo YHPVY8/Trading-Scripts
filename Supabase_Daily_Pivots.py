@@ -1,67 +1,13 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+import os
 import pandas as pd
 from supabase import create_client, Client
-import os
 
 # --- Supabase connection ---
-#!/usr/bin/env python3
-import streamlit as st
-import pandas as pd
-from supabase import create_client
-import altair as alt
-
-# ---- CONFIG ----
-st.set_page_config(page_title="Trading Dashboard", layout="wide")
-
-# Your Supabase credentials (move to Streamlit secrets later)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-TABLES = {
-    "Daily ES": "daily_es",
-    "Weekly ES": "es_weekly",
-    "30m ES": "es_30m",
-    "2h ES": "es_2hr",
-    "4h ES": "es_4hr",
-}
-
-st.title("📊 Trading Dashboard")
-
-# ---- Sidebar controls ----
-table_choice = st.sidebar.selectbox("Select timeframe", list(TABLES.keys()))
-limit = st.sidebar.number_input("How many rows to load?", value=500, min_value=50, step=50)
-
-# ---- Load data ----
-table_name = TABLES[table_choice]
-st.write(f"Loading data from **{table_name}** …")
-response = sb.table(table_name).select("*").order("time", desc=True).limit(limit).execute()
-
-if not response.data:
-    st.error("No data returned. Check table or credentials.")
-    st.stop()
-
-df = pd.DataFrame(response.data)
-df = df.sort_values("time")  # chronological
-
-# ---- Show data ----
-st.subheader("Raw data preview")
-st.dataframe(df.tail(20))
-
-# ---- Chart ----
-if all(c in df.columns for c in ["time", "close"]):
-    chart = (
-        alt.Chart(df)
-        .mark_line()
-        .encode(x="time:T", y="close:Q")
-        .properties(height=400)
-    )
-    st.altair_chart(chart, use_container_width=True)
-else:
-    st.warning("Could not plot — missing time/close columns.")
-
 
 print("URL:", SUPABASE_URL)
 print("KEY exists?", bool(SUPABASE_KEY))
@@ -69,27 +15,56 @@ print("KEY length:", len(SUPABASE_KEY) if SUPABASE_KEY else "None")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Step 1: Load source data (daily prices) from Supabase ---
-response = supabase.table("daily_es").select("*").execute()
-df = pd.DataFrame(response.data)
-df["time"] = pd.to_datetime(df["time"])
-df = df.sort_values("time").reset_index(drop=True)
+# ---------- helpers ----------
+def fetch_all_rows(table: str, order_col: str = "time", page_size: int = 1000) -> pd.DataFrame:
+    """
+    Pull ALL rows from a table by paginating with .range().
+    Supabase/PostgREST caps SELECT at 1000 rows unless you specify a range.
+    """
+    all_chunks = []
+    start = 0
+    while True:
+        # range is inclusive; end = start + page_size - 1
+        end = start + page_size - 1
+        resp = (
+            supabase.table(table)
+            .select("*")
+            .order(order_col, desc=False)   # oldest -> newest
+            .range(start, end)
+            .execute()
+        )
+        chunk = resp.data or []
+        if not chunk:
+            break
+        all_chunks.extend(chunk)
+        if len(chunk) < page_size:
+            break
+        start += page_size
 
-# --- Step 2: Add extra columns for calculations ---
-df["Day"] = df["time"].dt.strftime('%A')
-df["date"] = df["time"].dt.strftime('%Y-%m-%d')
+    df = pd.DataFrame(all_chunks)
+    if not df.empty and order_col in df.columns:
+        df[order_col] = pd.to_datetime(df[order_col])
+        df = df.sort_values(order_col).reset_index(drop=True)
+    return df
 
-results = []  # collect rows to insert into pivot_levels table
-num_days = min(1000, len(df))
+# ---------- Step 1: Load ALL source data (daily prices) ----------
+df = fetch_all_rows("daily_es", order_col="time", page_size=1000)
+if df.empty:
+    raise RuntimeError("daily_es returned no rows; cannot compute pivots.")
 
-for i in range(len(df) - num_days, len(df)):
-    prior_day_index = i - 1
-    if prior_day_index < 0:
-        continue
+print(f"Loaded {len(df):,} rows from daily_es.")
+print(f"Date range: {df['time'].min().date()} → {df['time'].max().date()}")
 
-    pHi = df.loc[prior_day_index, "high"]
-    pLo = df.loc[prior_day_index, "low"]
-    pCL = df.loc[prior_day_index, "close"]
+# ---------- Step 2: Add extra columns ----------
+df["Day"] = df["time"].dt.strftime("%A")
+df["date"] = df["time"].dt.date  # Python date (we'll stringify just before upload)
+
+# ---------- Step 3: Compute pivots for ALL rows (except first, needs prior day) ----------
+results = []
+for i in range(1, len(df)):  # start at 1 because we need prior day (i-1)
+    pHi = df.loc[i - 1, "high"]
+    pLo = df.loc[i - 1, "low"]
+    pCL = df.loc[i - 1, "close"]
 
     pivot = (pHi + pLo + pCL + pCL) / 4
     r1 = (pivot * 2) - pLo
@@ -105,7 +80,6 @@ for i in range(len(df) - num_days, len(df)):
     r3 = pHi + (2 * (pivot - pLo))
     s3 = pLo - (2 * (pHi - pivot))
 
-    # Get the current day high/low to check for hits
     current_high = df.loc[i, "high"]
     current_low = df.loc[i, "low"]
 
@@ -113,52 +87,57 @@ for i in range(len(df) - num_days, len(df)):
         "hit_pivot": current_high >= pivot >= current_low,
         "hit_r025": current_high >= r025 >= current_low,
         "hit_s025": current_high >= s025 >= current_low,
-        "hit_r05": current_high >= r05 >= current_low,
-        "hit_s05": current_high >= s05 >= current_low,
-        "hit_r1": current_high >= r1 >= current_low,
-        "hit_s1": current_high >= s1 >= current_low,
-        "hit_r15": current_high >= r15 >= current_low,
-        "hit_s15": current_high >= s15 >= current_low,
-        "hit_r2": current_high >= r2 >= current_low,
-        "hit_s2": current_high >= s2 >= current_low,
-        "hit_r3": current_high >= r3 >= current_low,
-        "hit_s3": current_high >= s3 >= current_low,
+        "hit_r05":  current_high >= r05  >= current_low,
+        "hit_s05":  current_high >= s05  >= current_low,
+        "hit_r1":   current_high >= r1   >= current_low,
+        "hit_s1":   current_high >= s1   >= current_low,
+        "hit_r15":  current_high >= r15  >= current_low,
+        "hit_s15":  current_high >= s15  >= current_low,
+        "hit_r2":   current_high >= r2   >= current_low,
+        "hit_s2":   current_high >= s2   >= current_low,
+        "hit_r3":   current_high >= r3   >= current_low,
+        "hit_s3":   current_high >= s3   >= current_low,
     }
 
     results.append({
-        "date": df.loc[i, "date"],
+        "date": df.loc[i, "date"],  # Python date for now
         "day": df.loc[i, "Day"],
-        "phi": pHi,
-        "plo": pLo,
-        "pcl": pCL,
-        "pivot": pivot,
-        "r025": r025,
-        "s025": s025,
-        "r05": r05,
-        "s05": s05,
-        "r1": r1,
-        "s1": s1,
-        "r15": r15,
-        "s15": s15,
-        "r2": r2,
-        "s2": s2,
-        "r3": r3,
-        "s3": s3,
+        "phi":   round(pHi,    2),
+        "plo":   round(pLo,    2),
+        "pcl":   round(pCL,    2),
+        "pivot": round(pivot,  2),
+        "r025":  round(r025,   2),
+        "s025":  round(s025,   2),
+        "r05":   round(r05,    2),
+        "s05":   round(s05,    2),
+        "r1":    round(r1,     2),
+        "s1":    round(s1,     2),
+        "r15":   round(r15,    2),
+        "s15":   round(s15,    2),
+        "r2":    round(r2,     2),
+        "s2":    round(s2,     2),
+        "r3":    round(r3,     2),
+        "s3":    round(s3,     2),
         **hit_conditions
     })
 
-# --- Step 3: Convert to DataFrame and format decimals ---
 df_results = pd.DataFrame(results)
+print(f"Computed {len(df_results):,} pivot rows.")
 
+# ---------- Step 4: Stringify date, then UPSERT in batches (≤1000) ----------
 if not df_results.empty:
-    # Round all numeric columns to 2 decimals
-    num_cols = df_results.select_dtypes(include=['float', 'float64', 'int']).columns
-    df_results[num_cols] = df_results[num_cols].round(2)
+    df_results["date"] = df_results["date"].astype(str)
 
-    # Upsert to avoid duplicates
-    supabase.table("es_daily_pivot_levels") \
-        .upsert(df_results.to_dict(orient="records"), on_conflict=["date"]) \
-        .execute()
-    print(f"Upserted {len(df_results)} rows into es_daily_pivot_levels.")
+    BATCH = 1000
+    total = len(df_results)
+    for start in range(0, total, BATCH):
+        end = start + BATCH
+        batch = df_results.iloc[start:end]
+        supabase.table("es_daily_pivot_levels") \
+            .upsert(batch.to_dict(orient="records"), on_conflict=["date"]) \
+            .execute()
+        print(f"  - Upserted rows {start+1:,}–{min(end, total):,}")
+
+    print(f"Upserted {total:,} rows into es_daily_pivot_levels.")
 else:
     print("No data to insert.")
