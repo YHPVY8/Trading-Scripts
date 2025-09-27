@@ -6,8 +6,62 @@ from supabase import create_client, Client
 import os
 
 # --- Supabase connection ---
+#!/usr/bin/env python3
+import streamlit as st
+import pandas as pd
+from supabase import create_client
+import altair as alt
+
+# ---- CONFIG ----
+st.set_page_config(page_title="Trading Dashboard", layout="wide")
+
+# Your Supabase credentials (move to Streamlit secrets later)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+TABLES = {
+    "Daily ES": "daily_es",
+    "Weekly ES": "es_weekly",
+    "30m ES": "es_30m",
+    "2h ES": "es_2hr",
+    "4h ES": "es_4hr",
+}
+
+st.title("📊 Trading Dashboard")
+
+# ---- Sidebar controls ----
+table_choice = st.sidebar.selectbox("Select timeframe", list(TABLES.keys()))
+limit = st.sidebar.number_input("How many rows to load?", value=500, min_value=50, step=50)
+
+# ---- Load data ----
+table_name = TABLES[table_choice]
+st.write(f"Loading data from **{table_name}** …")
+response = sb.table(table_name).select("*").order("time", desc=True).limit(limit).execute()
+
+if not response.data:
+    st.error("No data returned. Check table or credentials.")
+    st.stop()
+
+df = pd.DataFrame(response.data)
+df = df.sort_values("time")  # chronological
+
+# ---- Show data ----
+st.subheader("Raw data preview")
+st.dataframe(df.tail(20))
+
+# ---- Chart ----
+if all(c in df.columns for c in ["time", "close"]):
+    chart = (
+        alt.Chart(df)
+        .mark_line()
+        .encode(x="time:T", y="close:Q")
+        .properties(height=400)
+    )
+    st.altair_chart(chart, use_container_width=True)
+else:
+    st.warning("Could not plot — missing time/close columns.")
+
 
 print("URL:", SUPABASE_URL)
 print("KEY exists?", bool(SUPABASE_KEY))
@@ -74,9 +128,9 @@ for i in range(len(df) - num_days, len(df)):
     results.append({
         "date": df.loc[i, "date"],
         "day": df.loc[i, "Day"],
-        "phi": pHi,    # <-- lowercase key
-        "plo": pLo,    # <-- lowercase key
-        "pcl": pCL,    # <-- lowercase key
+        "phi": pHi,
+        "plo": pLo,
+        "pcl": pCL,
         "pivot": pivot,
         "r025": r025,
         "s025": s025,
@@ -93,17 +147,18 @@ for i in range(len(df) - num_days, len(df)):
         **hit_conditions
     })
 
-
-# --- Step 3: Convert to DataFrame and push to Supabase ---
+# --- Step 3: Convert to DataFrame and format decimals ---
 df_results = pd.DataFrame(results)
 
-
-# Insert new rows
 if not df_results.empty:
+    # Round all numeric columns to 2 decimals
+    num_cols = df_results.select_dtypes(include=['float', 'float64', 'int']).columns
+    df_results[num_cols] = df_results[num_cols].round(2)
+
+    # Upsert to avoid duplicates
     supabase.table("es_daily_pivot_levels") \
         .upsert(df_results.to_dict(orient="records"), on_conflict=["date"]) \
         .execute()
     print(f"Upserted {len(df_results)} rows into es_daily_pivot_levels.")
 else:
     print("No data to insert.")
-
