@@ -2,7 +2,7 @@
 import streamlit as st
 from supabase import create_client
 import pandas as pd
-import runpy
+from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
 # ----------------------------
 # CONFIGURE PAGE
@@ -11,15 +11,10 @@ st.set_page_config(layout="wide")
 st.markdown(
     """
     <style>
-        /* Remove default horizontal padding */
         .block-container {
             padding-left: 1rem;
             padding-right: 1rem;
             max-width: 100%;
-        }
-        /* Make tables stretch full width */
-        .stDataFrame {
-            width: 100% !important;
         }
     </style>
     """,
@@ -44,17 +39,15 @@ if section == "Source Data":
         ["daily_es", "es_weekly", "es_30m", "es_2hr", "es_4hr"]
     )
 
-    # Fetch more rows (adjust limit if needed)
     rows = sb.table(table).select("*").limit(20000).execute()
     data = pd.DataFrame(rows.data)
 
     if not data.empty:
-        # --- AgGrid for spreadsheet feel ---
-        from st_aggrid import AgGrid, GridOptionsBuilder
-
         gb = GridOptionsBuilder.from_dataframe(data)
+        gb.configure_default_column(resizable=True, wrapText=True, autoHeight=True)
         gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
-        gb.configure_side_bar()  # optional: column visibility, filter, etc.
+        gb.configure_side_bar()
+
         grid_options = gb.build()
 
         AgGrid(
@@ -70,32 +63,37 @@ if section == "Source Data":
 elif section == "Pivots":
     st.header("Daily Pivots")
 
-    if st.button("Run Daily Pivots"):
-        st.info("Running Supabase_Daily_Pivots.py ...")
-        try:
-            # Run the pivot script
-            runpy.run_path("Supabase_Daily_Pivots.py")
-            st.success("Pivot script executed ✅")
+    rows = sb.table("es_daily_pivot_levels").select("*").limit(20000).execute()
+    pivots = pd.DataFrame(rows.data)
 
-            # Show pivots from Supabase
-            rows = sb.table("es_daily_pivot_levels").select("*").limit(20000).execute()
-            pivots = pd.DataFrame(rows.data)
+    if not pivots.empty:
+        gb = GridOptionsBuilder.from_dataframe(pivots)
+        gb.configure_default_column(resizable=True, wrapText=True, autoHeight=True)
+        gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
+        gb.configure_side_bar()
 
-            if not pivots.empty:
-                from st_aggrid import AgGrid, GridOptionsBuilder
+        # Conditional styling: highlight True in green for Hit... columns
+        green_style = JsCode("""
+            function(params) {
+                if (params.value === true) {
+                    return {
+                        'backgroundColor': '#98FB98',
+                        'color': 'black'
+                    }
+                }
+            }
+        """)
+        for col in pivots.columns:
+            if col.lower().startswith("hit") or "pivot" in col.lower():
+                gb.configure_column(col, cellStyle=green_style)
 
-                gb = GridOptionsBuilder.from_dataframe(pivots)
-                gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=100)
-                gb.configure_side_bar()
-                grid_options = gb.build()
+        grid_options = gb.build()
 
-                AgGrid(
-                    pivots,
-                    gridOptions=grid_options,
-                    height=600,
-                    fit_columns_on_grid_load=True
-                )
-            else:
-                st.info("No pivot data found in table `es_daily_pivot_levels`.")
-        except Exception as e:
-            st.error(f"Error running pivots: {e}")
+        AgGrid(
+            pivots,
+            gridOptions=grid_options,
+            height=600,
+            fit_columns_on_grid_load=True
+        )
+    else:
+        st.info("No pivot data found in `es_daily_pivot_levels`.")
