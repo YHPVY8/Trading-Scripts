@@ -93,7 +93,9 @@ elif section == "Pivots":
             pivots,
             gridOptions=grid_options,
             height=600,
-            fit_columns_on_grid_load=True
+            fit_columns_on_grid_load=True,
+            allow_unsafe_jscode=True,   # <-- this fixes the JsCode error
+            width='stretch'             # replaces use_container_width
         )
     else:
         st.info("No pivot data found in `es_daily_pivot_levels`.")
