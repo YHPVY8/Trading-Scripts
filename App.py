@@ -32,8 +32,8 @@ def load_table(table_name, limit=1000, date_col="time"):
 
 def format_numbers(df):
     """Round floats to 2 decimals."""
-    for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
-        df[col] = df[col].round(2)
+    num_cols = df.select_dtypes(include=["float", "float64", "int"]).columns
+    df[num_cols] = df[num_cols].round(2)
     return df
 
 def highlight_hits(val, col):
@@ -43,7 +43,6 @@ def highlight_hits(val, col):
     return ""
 
 def styled_dataframe(df):
-    hit_cols = [c for c in df.columns if c.lower().startswith("hit")]
     return df.style.apply(
         lambda s: [highlight_hits(v, s.name) for v in s],
         axis=0
