@@ -13,40 +13,35 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---------- Helper Functions ----------
 def load_table(table_name, limit=1000, date_col="time"):
-    """Fetch last `limit` rows ordered by date_col descending, then re-sort ascending."""
-    rows = (
-        sb.table(table_name)
-        .select("*")
-        .order(date_col, desc=True)
-        .limit(limit)
-        .execute()
-    )
+    """Fetch all rows, sort by real datetime, return latest `limit` rows ascending."""
+    rows = sb.table(table_name).select("*").execute()
     df = pd.DataFrame(rows.data)
-    if not df.empty:
-        # Sort ascending so most recent ends at bottom
-        df = df.sort_values(date_col)
-        # Drop id column if present
+    if not df.empty and date_col in df.columns:
+        # Convert to real datetime
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df.dropna(subset=[date_col])
+        # Take latest limit rows, then re-sort ascending so newest is bottom
+        df = df.sort_values(date_col, ascending=False).head(limit).sort_values(date_col)
+        # Drop id if exists
         if "id" in df.columns:
             df = df.drop(columns=["id"])
     return df
 
 def format_numbers(df):
-    """Round floats to 2 decimals."""
+    """Round floats to 2 decimals (in-place)."""
     num_cols = df.select_dtypes(include=["float", "float64", "int"]).columns
-    df[num_cols] = df[num_cols].round(2)
+    for c in num_cols:
+        df[c] = df[c].round(2)
     return df
 
 def highlight_hits(val, col):
-    """Highlight True/✓ in hit columns."""
+    """Light green fill on True/✓ in hit columns."""
     if col.lower().startswith("hit") and (val is True or str(val).lower() == "true" or val == "✓"):
         return "background-color: #98FB98"
     return ""
 
 def styled_dataframe(df):
-    return df.style.apply(
-        lambda s: [highlight_hits(v, s.name) for v in s],
-        axis=0
-    )
+    return df.style.apply(lambda s: [highlight_hits(v, s.name) for v in s], axis=0)
 
 # ---------- Sidebar Navigation ----------
 section = st.sidebar.radio("Go to", ["Source Data", "Pivots"])
@@ -75,35 +70,12 @@ elif section == "Pivots":
     st.header("Daily Pivots")
     pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
     if not pivots.empty:
-        # Round floats
-        num_cols = pivots.select_dtypes(include=['float', 'float64', 'int']).columns
-        pivots[num_cols] = pivots[num_cols].round(2)
-
-        # Build column config to format numbers with 2 decimals
-        col_config = {
-            col: st.column_config.NumberColumn(col, format="%.2f")
-            for col in num_cols
-        }
-
-        # Apply green background to hit columns
-        hit_cols = [c for c in pivots.columns if c.lower().startswith("hit")]
-        for col in hit_cols:
-            # Convert booleans to ✓/"" for nicer display
-            pivots[col] = pivots[col].apply(lambda x: "✓" if x else "")
-            # Turn the column into a text column with background color
-            col_config[col] = st.column_config.TextColumn(
-                col,
-                help="True = ✓",
-                width="small"
-            )
-
+        pivots = format_numbers(pivots)
         st.dataframe(
-            pivots,
+            styled_dataframe(pivots),
             width="stretch",
             hide_index=True,
-            height=600,
-            column_config=col_config
+            height=600
         )
     else:
         st.warning("No pivots found.")
-
