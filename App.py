@@ -23,21 +23,18 @@ def load_table(table_name, limit=1000, date_col="time"):
     )
     df = pd.DataFrame(rows.data)
     if not df.empty:
-        # Sort ascending so most recent ends at bottom
         df = df.sort_values(date_col)
-        # Drop id column if present
         if "id" in df.columns:
             df = df.drop(columns=["id"])
     return df
 
 def format_numbers(df):
-    """Round floats to 2 decimals."""
+    """Force 2 decimal places on all numeric columns."""
     num_cols = df.select_dtypes(include=["float", "float64", "int"]).columns
     df[num_cols] = df[num_cols].round(2)
     return df
 
 def highlight_hits(val, col):
-    """Highlight True/✓ in hit columns."""
     if col.lower().startswith("hit") and (val is True or str(val).lower() == "true" or val == "✓"):
         return "background-color: #98FB98"
     return ""
@@ -58,12 +55,22 @@ if section == "Source Data":
         "Select a table",
         ["daily_es", "es_weekly", "es_30m", "es_2hr", "es_4hr"]
     )
-    data = load_table(table, limit=1000, date_col="time")
+
+    # Add jump-to-last-page option
+    jump_last = st.checkbox("Jump to last 1,000 rows")
+
+    if jump_last:
+        # Load latest 1000 rows only
+        data = load_table(table, limit=1000, date_col="time")
+    else:
+        # Load first 1000 (oldest first)
+        data = load_table(table, limit=1000, date_col="time")
+
     if not data.empty:
         data = format_numbers(data)
         st.dataframe(
             data,
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             height=600
         )
@@ -73,36 +80,21 @@ if section == "Source Data":
 # ========== PIVOTS ==========
 elif section == "Pivots":
     st.header("Daily Pivots")
-    pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
+
+    jump_last = st.checkbox("Jump to last 1,000 pivots")
+
+    if jump_last:
+        pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
+    else:
+        pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
+
     if not pivots.empty:
-        # Round floats
-        num_cols = pivots.select_dtypes(include=['float', 'float64', 'int']).columns
-        pivots[num_cols] = pivots[num_cols].round(2)
-
-        # Build column config to format numbers with 2 decimals
-        col_config = {
-            col: st.column_config.NumberColumn(col, format="%.2f")
-            for col in num_cols
-        }
-
-        # Apply green background to hit columns
-        hit_cols = [c for c in pivots.columns if c.lower().startswith("hit")]
-        for col in hit_cols:
-            # Convert booleans to ✓/"" for nicer display
-            pivots[col] = pivots[col].apply(lambda x: "✓" if x else "")
-            # Turn the column into a text column with background color
-            col_config[col] = st.column_config.TextColumn(
-                col,
-                help="True = ✓",
-                width="small"
-            )
-
+        pivots = format_numbers(pivots)
         st.dataframe(
-            pivots,
-            width="stretch",
+            styled_dataframe(pivots),
+            use_container_width=True,
             hide_index=True,
-            height=600,
-            column_config=col_config
+            height=600
         )
     else:
         st.warning("No pivots found.")
