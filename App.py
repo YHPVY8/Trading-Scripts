@@ -13,7 +13,7 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---------- Helper Functions ----------
 def load_table(table_name, limit=1000, date_col="time"):
-    """Fetch last `limit` rows ordered by date_col descending, then re-sort ascending."""
+    """Fetch most recent `limit` rows, sort ascending by date_col so newest ends at bottom."""
     rows = (
         sb.table(table_name)
         .select("*")
@@ -23,21 +23,19 @@ def load_table(table_name, limit=1000, date_col="time"):
     )
     df = pd.DataFrame(rows.data)
     if not df.empty:
-        # Sort ascending so most recent ends at bottom
         df = df.sort_values(date_col)
-        # Drop id column if present
         if "id" in df.columns:
             df = df.drop(columns=["id"])
     return df
 
 def format_numbers(df):
-    """Round floats to 2 decimals."""
-    for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
-        df[col] = df[col].round(2)
+    """Force 2 decimal places on all numeric columns."""
+    num_cols = df.select_dtypes(include=["number"]).columns
+    for col in num_cols:
+        df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
     return df
 
 def highlight_hits(val, col):
-    """Highlight True/✓ in hit columns."""
     if col.lower().startswith("hit") and (val is True or str(val).lower() == "true" or val == "✓"):
         return "background-color: #98FB98"
     return ""
@@ -63,7 +61,7 @@ if section == "Source Data":
         data = format_numbers(data)
         st.dataframe(
             data,
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             height=600
         )
@@ -76,24 +74,11 @@ elif section == "Pivots":
     pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
     if not pivots.empty:
         pivots = format_numbers(pivots)
-
-        # --- Optional day filter ---
-        day_filter = st.selectbox(
-            "Filter by Day",
-            options=["All"] + sorted(pivots["day"].unique())
-        )
-        if day_filter != "All":
-            pivots = pivots[pivots["day"] == day_filter]
-
-        # --- Show as interactive editor (scrolls to last row automatically) ---
-        st.data_editor(
+        st.dataframe(
             styled_dataframe(pivots),
             use_container_width=True,
             hide_index=True,
-            height=600,
-            key="pivots_editor",
-            disabled=True,
-            selected_rows=[len(pivots)-1]  # jump view to bottom
+            height=600
         )
     else:
         st.warning("No pivots found.")
