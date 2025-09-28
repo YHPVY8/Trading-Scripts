@@ -13,7 +13,7 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---------- Helper Functions ----------
 def load_table(table_name, limit=1000, date_col="time"):
-    """Fetch last `limit` rows ordered by date_col descending, then re-sort ascending."""
+    """Fetch most recent `limit` rows, sort ascending by date_col so newest ends at bottom."""
     rows = (
         sb.table(table_name)
         .select("*")
@@ -30,8 +30,9 @@ def load_table(table_name, limit=1000, date_col="time"):
 
 def format_numbers(df):
     """Force 2 decimal places on all numeric columns."""
-    num_cols = df.select_dtypes(include=["float", "float64", "int"]).columns
-    df[num_cols] = df[num_cols].round(2)
+    num_cols = df.select_dtypes(include=["number"]).columns
+    for col in num_cols:
+        df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
     return df
 
 def highlight_hits(val, col):
@@ -55,17 +56,7 @@ if section == "Source Data":
         "Select a table",
         ["daily_es", "es_weekly", "es_30m", "es_2hr", "es_4hr"]
     )
-
-    # Add jump-to-last-page option
-    jump_last = st.checkbox("Jump to last 1,000 rows")
-
-    if jump_last:
-        # Load latest 1000 rows only
-        data = load_table(table, limit=1000, date_col="time")
-    else:
-        # Load first 1000 (oldest first)
-        data = load_table(table, limit=1000, date_col="time")
-
+    data = load_table(table, limit=1000, date_col="time")
     if not data.empty:
         data = format_numbers(data)
         st.dataframe(
@@ -80,14 +71,7 @@ if section == "Source Data":
 # ========== PIVOTS ==========
 elif section == "Pivots":
     st.header("Daily Pivots")
-
-    jump_last = st.checkbox("Jump to last 1,000 pivots")
-
-    if jump_last:
-        pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
-    else:
-        pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
-
+    pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
     if not pivots.empty:
         pivots = format_numbers(pivots)
         st.dataframe(
