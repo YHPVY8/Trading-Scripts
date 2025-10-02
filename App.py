@@ -19,7 +19,7 @@ limit = st.sidebar.number_input("How many rows to load?", value=2000, min_value=
 response = (
     sb.table("es_daily_pivot_levels")
     .select("*")
-    .order("date", desc=True)
+    .order("date", desc=False)
     .limit(limit)
     .execute()
 )
