@@ -29,44 +29,33 @@ limit = st.sidebar.number_input("Number of rows to load", value=1000, min_value=
 table_name, date_col = TABLES[choice]
 
 # ---- Load ----
-if choice == "Daily Pivots":
-    # Fetch most recent `limit` rows but show oldest first
-    response = (
-        sb.table(table_name)
-        .select("*")
-        .order(date_col, desc=True)
-        .limit(limit)
-        .execute()
-    )
-    df = pd.DataFrame(response.data)
-    if not df.empty:
-        df = df.sort_values(date_col)  # so user sees oldest at top
-        # Keep only hit columns and date/day
-        keep_cols = [
-            "date","day",
-            "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-            "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
-        ]
-        df = df[[c for c in keep_cols if c in df.columns]]
-        # Format numbers
-        for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
-            df[col] = df[col].round(2)
-else:
-    # Generic tables (Daily ES etc.)
-    response = (
-        sb.table(table_name)
-        .select("*")
-        .order(date_col, desc=False)
-        .limit(limit)
-        .execute()
-    )
-    df = pd.DataFrame(response.data)
-    if not df.empty:
-        df = df.sort_values(date_col)
+response = (
+    sb.table(table_name)
+    .select("*")
+    .order(date_col, desc=True)  # get most recent rows first
+    .limit(limit)
+    .execute()
+)
+df = pd.DataFrame(response.data)
 
 if df.empty:
     st.error("No data returned.")
     st.stop()
+
+# Sort ascending so newest is at bottom
+df = df.sort_values(date_col)
+
+if choice == "Daily Pivots":
+    keep_cols = [
+        "date","day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
+    ]
+    df = df[[c for c in keep_cols if c in df.columns]]
+
+# Round numeric columns to 2 decimals
+for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
+    df[col] = df[col].round(2)
 
 # ---- Filter UI ----
 col_to_filter = st.sidebar.selectbox("Filter column", ["None"] + list(df.columns))
