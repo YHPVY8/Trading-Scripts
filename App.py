@@ -1,84 +1,73 @@
+#!/usr/bin/env python3
 import streamlit as st
 import pandas as pd
 from supabase import create_client
+import os
 
-# ---------- Page setup ----------
+# ---- CONFIG ----
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
-st.title("Trading Dashboard")
 
-# ---------- Connect to Supabase ----------
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# ---------- Helper Functions ----------
-def load_table(table_name, limit=1000, date_col="time"):
-    """Fetch most recent `limit` rows, sort ascending by date_col so newest ends at bottom."""
-    rows = (
-        sb.table(table_name)
-        .select("*")
-        .order(date_col, desc=True)
-        .limit(limit)
-        .execute()
-    )
-    df = pd.DataFrame(rows.data)
-    if not df.empty:
-        df = df.sort_values(date_col)
-        if "id" in df.columns:
-            df = df.drop(columns=["id"])
-    return df
+# ---- Load pivots table ----
+st.title("📊 Trading Dashboard — Daily Pivots")
 
-def format_numbers(df):
-    """Force 2 decimal places on all numeric columns."""
-    num_cols = df.select_dtypes(include=["number"]).columns
-    for col in num_cols:
-        df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
-    return df
+limit = st.sidebar.number_input("How many rows to load?", value=2000, min_value=100, step=100)
 
-def highlight_hits(val, col):
-    if col.lower().startswith("hit") and (val is True or str(val).lower() == "true" or val == "✓"):
+response = (
+    sb.table("es_daily_pivot_levels")
+    .select("*")
+    .order("date", desc=True)
+    .limit(limit)
+    .execute()
+)
+
+if not response.data:
+    st.error("No data returned.")
+    st.stop()
+
+df = pd.DataFrame(response.data)
+
+# Ensure correct column order & drop extras
+keep_cols = [
+    "date","day",
+    "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+    "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
+]
+df = df[[c for c in keep_cols if c in df.columns]]
+
+# Format dates & numbers cleanly
+if "date" in df.columns:
+    df["date"] = pd.to_datetime(df["date"]).dt.date
+
+# ---- Filtering UI ----
+col_to_filter = st.sidebar.selectbox("Filter column", ["None"] + [c for c in df.columns if c not in ("date",)])
+if col_to_filter != "None":
+    unique_vals = df[col_to_filter].dropna().unique().tolist()
+    # Show dropdown for discrete or text input fallback
+    if len(unique_vals) < 100:
+        selected = st.sidebar.multiselect(f"Filter {col_to_filter}", sorted(unique_vals))
+        if selected:
+            df = df[df[col_to_filter].isin(selected)]
+    else:
+        text_val = st.sidebar.text_input(f"Search in {col_to_filter}")
+        if text_val:
+            df = df[df[col_to_filter].astype(str).str.contains(text_val, case=False, na=False)]
+
+# ---- Color hit columns ----
+def color_hits(val):
+    if val is True or str(val).lower() == "true":
         return "background-color: #98FB98"
     return ""
 
-def styled_dataframe(df):
-    return df.style.apply(
-        lambda s: [highlight_hits(v, s.name) for v in s],
-        axis=0
-    )
+st.dataframe(
+    df.style.applymap(color_hits, subset=[c for c in df.columns if c.startswith("hit")]),
+    height=600,
+    use_container_width=True
+)
 
-# ---------- Sidebar Navigation ----------
-section = st.sidebar.radio("Go to", ["Source Data", "Pivots"])
-
-# ========== SOURCE DATA ==========
-if section == "Source Data":
-    st.header("Source Data")
-    table = st.selectbox(
-        "Select a table",
-        ["daily_es", "es_weekly", "es_30m", "es_2hr", "es_4hr"]
-    )
-    data = load_table(table, limit=1000, date_col="time")
-    if not data.empty:
-        data = format_numbers(data)
-        st.dataframe(
-            data,
-            use_container_width=True,
-            hide_index=True,
-            height=600
-        )
-    else:
-        st.warning("No data found.")
-
-# ========== PIVOTS ==========
-elif section == "Pivots":
-    st.header("Daily Pivots")
-    pivots = load_table("es_daily_pivot_levels", limit=1000, date_col="date")
-    if not pivots.empty:
-        pivots = format_numbers(pivots)
-        st.dataframe(
-            styled_dataframe(pivots),
-            use_container_width=True,
-            hide_index=True,
-            height=600
-        )
-    else:
-        st.warning("No pivots found.")
+# ---- Scroll to bottom option ----
+if st.button("⬇️ Scroll to latest"):
+    st.write("Use the table scrollbar — newest rows are already loaded at top by default.")
