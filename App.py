@@ -20,7 +20,7 @@ TABLES = {
     "Daily Pivots": ("es_daily_pivot_levels", "date"),
 }
 
-st.title("Trading Dashboard")
+st.title("📊 Trading Dashboard")
 
 # ---- Sidebar ----
 choice = st.sidebar.selectbox("Select data set", list(TABLES.keys()))
@@ -81,7 +81,6 @@ for col, op, val in filters:
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
 
-
 # ---- Highlight for pivots ----
 def color_hits(val):
     if val is True or str(val).lower() == "true":
@@ -89,10 +88,10 @@ def color_hits(val):
     return ""
 
 if choice == "Daily Pivots":
-    styled = df.style.applymap(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
-    st.dataframe(styled, use_container_width=True, height=600)
+    styled = df.style.map(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
+    st.dataframe(styled, width='stretch', height=600)
 else:
-    st.dataframe(df, use_container_width=True, height=600)
+    st.dataframe(df, width='stretch', height=600)
 
 st.download_button(
     "💾 Download filtered CSV",
