@@ -20,7 +20,7 @@ TABLES = {
     "Daily Pivots": ("es_daily_pivot_levels", "date"),
 }
 
-st.title("📊 Trading Dashboard")
+st.title("Trading Dashboard")
 
 # ---- Sidebar ----
 choice = st.sidebar.selectbox("Select data set", list(TABLES.keys()))
