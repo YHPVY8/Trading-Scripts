@@ -20,7 +20,7 @@ TABLES = {
     "Daily Pivots": ("es_daily_pivot_levels", "date"),
 }
 
-st.title("📊 Trading Dashboard")
+st.title("Trading Dashboard")
 
 # ---- Sidebar ----
 choice = st.sidebar.selectbox("Select data set", list(TABLES.keys()))
@@ -45,12 +45,11 @@ if df.empty:
 # Sort ascending so newest is at bottom
 df = df.sort_values(date_col)
 
-# Restrict Daily Pivots to specific columns
 if choice == "Daily Pivots":
     keep_cols = [
-        "date", "day",
-        "hit_pivot", "hit_r025", "hit_s025", "hit_r05", "hit_s05",
-        "hit_r1", "hit_s1", "hit_r15", "hit_s15", "hit_r2", "hit_s2", "hit_r3", "hit_s3"
+        "date","day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
     ]
     df = df[[c for c in keep_cols if c in df.columns]]
 
@@ -58,31 +57,30 @@ if choice == "Daily Pivots":
 for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
     df[col] = df[col].round(2)
 
-# ---- Filter UI ----
-col_to_filter = st.sidebar.selectbox("Filter column", ["None"] + list(df.columns))
-if col_to_filter != "None":
-    unique_vals = df[col_to_filter].dropna().unique().tolist()
-    if len(unique_vals) < 100:
-        selected = st.sidebar.multiselect(f"Filter {col_to_filter}", sorted(unique_vals))
-        if selected:
-            df = df[df[col_to_filter].isin(selected)]
-    else:
-        text_val = st.sidebar.text_input(f"Search in {col_to_filter}")
-        if text_val:
-            df = df[df[col_to_filter].astype(str).str.contains(text_val, case=False, na=False)]
+# --- Multi-condition filter ---
+filters = []
+num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
 
-# ---- Clear Filters ----
 if st.sidebar.button("Clear Filters"):
     st.rerun()
 
-# ---- Download CSV ----
-csv = df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    label="⬇️ Download CSV",
-    data=csv,
-    file_name=f"{choice.replace(' ', '_')}.csv",
-    mime="text/csv",
-)
+for n in range(num_filters):
+    col = st.sidebar.selectbox(f"Column #{n+1}", df.columns, key=f"fcol{n}")
+    op = st.sidebar.selectbox(f"Op #{n+1}", ["equals","contains","greater than","less than"], key=f"fop{n}")
+    val = st.sidebar.text_input(f"Value #{n+1}", key=f"fval{n}")
+    if col and op and val:
+        filters.append((col,op,val))
+
+for col, op, val in filters:
+    if op == "equals":
+        df = df[df[col].astype(str) == val]
+    elif op == "contains":
+        df = df[df[col].astype(str).str.contains(val, case=False, na=False)]
+    elif op == "greater than":
+        df = df[pd.to_numeric(df[col], errors='coerce') > float(val)]
+    elif op == "less than":
+        df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
+
 
 # ---- Highlight for pivots ----
 def color_hits(val):
@@ -91,7 +89,14 @@ def color_hits(val):
     return ""
 
 if choice == "Daily Pivots":
-    styled = df.style.map(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
-    st.dataframe(styled, width='stretch', height=600)
+    styled = df.style.applymap(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
+    st.dataframe(styled, use_container_width=True, height=600)
 else:
-    st.dataframe(df, width='stretch', height=600)
+    st.dataframe(df, use_container_width=True, height=600)
+
+st.download_button(
+    "💾 Download filtered CSV",
+    df.to_csv(index=False).encode("utf-8"),
+    file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
+    mime="text/csv"
+)
