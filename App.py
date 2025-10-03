@@ -62,7 +62,7 @@ filters = []
 num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
 
 if st.sidebar.button("Clear Filters"):
-    st.experimental_rerun()
+    st.rerun()
 
 for n in range(num_filters):
     col = st.sidebar.selectbox(f"Column #{n+1}", df.columns, key=f"fcol{n}")
