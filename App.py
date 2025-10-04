@@ -18,6 +18,7 @@ TABLES = {
     "2h ES": ("es_2hr", "time"),
     "4h ES": ("es_4hr", "time"),
     "Daily Pivots": ("es_daily_pivot_levels", "date"),
+    "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
 }
 
 st.title("📊 Trading Dashboard")
