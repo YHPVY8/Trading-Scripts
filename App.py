@@ -81,16 +81,12 @@ if choice == "Weekly Pivots":
     ]
     df = df[[c for c in keep_cols if c in df.columns]]
 
-# 5️⃣ Restrict columns for intraday ES
-if choice in ["30m ES", "2h ES", "4h ES"]:
+# 5️⃣ Restrict columns for ES datasets (daily/weekly/intraday)
+if choice in ["Daily ES", "Weekly ES", "30m ES", "2h ES", "4h ES"]:
     keep = ["time","open","high","low","close","200MA","50MA","20MA","10MA","5MA","Volume","ATR"]
     df = df[[c for c in keep if c in df.columns]]
 
-# ---- Rounding numeric columns ----
-for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
-    df[col] = df[col].round(2)
-
-# ---- Final formatting for display ----
+# ---- Formatting numeric columns ----
 price_cols = ["open", "high", "low", "close", "200MA", "50MA", "20MA", "10MA", "5MA", "ATR"]
 for col in price_cols:
     if col in df.columns:
@@ -98,7 +94,6 @@ for col in price_cols:
 
 if "Volume" in df.columns:
     df["Volume"] = df["Volume"].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else x)
-
 
 # ---- Multi-condition filter ----
 filters = []
@@ -131,10 +126,9 @@ def color_hits(val):
     return ""
 
 def bold_headers(styler):
-    styler.set_table_styles(
+    return styler.set_table_styles(
         [{"selector": "thead th", "props": [("font-weight", "bold")]}]
     )
-    return styler
 
 if choice in ["Daily Pivots", "Weekly Pivots"]:
     styled = df.style.map(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
