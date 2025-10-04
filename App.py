@@ -82,18 +82,19 @@ for col, op, val in filters:
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
 
-# ---- Highlight for pivots ----
+# ---- Highlight hits (any dataset with hit_ columns) ----
 def color_hits(val):
     if val is True or str(val).lower() == "true":
         return "background-color: #98FB98"
     return ""
 
-if choice == "Daily Pivots":
+if any(c.startswith("hit") for c in df.columns):
     styled = df.style.map(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
     st.dataframe(styled, width='stretch', height=600)
 else:
     st.dataframe(df, width='stretch', height=600)
 
+# ---- Download button ----
 st.download_button(
     "💾 Download filtered CSV",
     df.to_csv(index=False).encode("utf-8"),
