@@ -90,6 +90,16 @@ if choice in ["30m ES", "2h ES", "4h ES"]:
 for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
     df[col] = df[col].round(2)
 
+# ---- Final formatting for display ----
+price_cols = ["open", "high", "low", "close", "200MA", "50MA", "20MA", "10MA", "5MA", "ATR"]
+for col in price_cols:
+    if col in df.columns:
+        df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
+
+if "Volume" in df.columns:
+    df["Volume"] = df["Volume"].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else x)
+
+
 # ---- Multi-condition filter ----
 filters = []
 num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
