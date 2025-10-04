@@ -42,6 +42,10 @@ if df.empty:
     st.error("No data returned.")
     st.stop()
 
+if date_col in df.columns:
+    df[date_col] = pd.to_datetime(df[date_col], errors='ignore')  # don't break date formats
+    df = df.sort_values(date_col).reset_index(drop=True)
+
 # --- CLEANUP PER DATASET ---
 # 1️⃣ Remove 'id' from Daily ES
 if choice == "Daily ES" and "id" in df.columns:
