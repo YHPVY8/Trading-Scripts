@@ -21,7 +21,7 @@ TABLES = {
     "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
 }
 
-# Columns we want to show for pivot tables
+# Which columns to actually show for pivot tables
 PIVOT_COLS = [
     "date","day",
     "phi","plo","pcl","pivot",
@@ -30,6 +30,50 @@ PIVOT_COLS = [
     "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
     "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3",
 ]
+
+# Numeric columns for pivots (so we coerce/round the right ones)
+PIVOT_NUM_COLS = [
+    "phi","plo","pcl","pivot",
+    "r025","s025","r05","s05",
+    "r1","s1","r15","s15","r2","s2","r3","s3",
+]
+
+# Numeric columns for price tables
+PRICE_NUM_COLS = [
+    "open","high","low","close",
+    "200MA","50MA","20MA","10MA","5MA",
+    "Volume","Volume MA","ATR",
+]
+
+def coerce_and_round(df: pd.DataFrame, cols: list[str], decimals: int = 2) -> pd.DataFrame:
+    """
+    Force numeric parsing for the specific columns:
+     - Strip thousands separators (',') if present
+     - Convert to numeric
+     - Round to `decimals`
+    Leaves missing or non-numeric as NaN.
+    """
+    for c in cols:
+        if c in df.columns:
+            # Work via string → remove commas → to_numeric
+            s = df[c].astype(str).str.replace(",", "", regex=False)
+            df[c] = pd.to_numeric(s, errors="coerce").round(decimals)
+    return df
+
+def style_hits(df: pd.DataFrame) -> pd.io.formats.style.Styler:
+    hit_cols = [c for c in df.columns if c.startswith("hit")]
+    def color_hits(val):
+        if val is True or str(val).lower() == "true":
+            return "background-color: #98FB98"
+        return ""
+    sty = df.style
+    if hit_cols:
+        sty = sty.map(color_hits, subset=hit_cols)
+    # Format numeric columns with 2 decimals for display (keeps booleans clean)
+    num_cols = df.select_dtypes(include=["float", "float64", "int", "int64"]).columns
+    fmt = {c: "{:.2f}" for c in num_cols}
+    sty = sty.format(fmt)
+    return sty
 
 st.title("📊 Trading Dashboard")
 
@@ -53,25 +97,21 @@ if df.empty:
     st.error("No data returned.")
     st.stop()
 
-# Sort ascending so newest ends at bottom in the view
+# Sort ascending so newest is at the bottom in the view
 df = df.sort_values(date_col)
 
-# If we're on a pivots table, restrict to known pivot cols (that exist)
+# ---- Column selection & numeric coercion
 if choice in ("Daily Pivots", "Weekly Pivots"):
+    # restrict to pivot columns that exist
     keep = [c for c in PIVOT_COLS if c in df.columns]
     df = df[keep]
+    df = coerce_and_round(df, PIVOT_NUM_COLS, decimals=2)
+else:
+    # price tables: coerce the known numeric columns that exist
+    price_cols_present = [c for c in PRICE_NUM_COLS if c in df.columns]
+    df = coerce_and_round(df, price_cols_present, decimals=2)
 
-# --- Coerce numeric + round 2dp (won’t touch bool hit_* columns)
-numeric_cols = df.select_dtypes(include=["float", "float64", "int", "int64"]).columns.tolist()
-# If some numeric fields arrived as strings, coerce them before rounding
-for c in df.columns:
-    if c not in ("date", "day") and not c.startswith("hit"):
-        df[c] = pd.to_numeric(df[c], errors="ignore")
-
-df[numeric_cols] = df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
-df[numeric_cols] = df[numeric_cols].round(2)
-
-# --- Multi-condition filter ---
+# ---- Multi-condition filter
 filters = []
 num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
 
@@ -95,41 +135,19 @@ for col, op, val in filters:
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
 
-# ---- Highlight hits (any dataset with hit_ columns) ----
-def color_hits(val):
-    if val is True or str(val).lower() == "true":
-        return "background-color: #98FB98"
-    return ""
-
+# ---- Display
 if any(c.startswith("hit") for c in df.columns):
-    styled = df.style.map(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
-    st.dataframe(styled, width='stretch', height=600)
+    st.dataframe(style_hits(df), width='stretch', height=600)
 else:
-    st.dataframe(df, width='stretch', height=600)
+    # Format numeric display to 2dp on non-pivot tables too
+    num_cols = df.select_dtypes(include=["float", "float64", "int", "int64"]).columns
+    sty = df.style.format({c: "{:.2f}" for c in num_cols})
+    st.dataframe(sty, width='stretch', height=600)
 
-# ---- Download button ----
+# ---- Download
 st.download_button(
     "💾 Download filtered CSV",
     df.to_csv(index=False).encode("utf-8"),
     file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
     mime="text/csv"
 )
-
-# ---- Debug / QA: compare a single row with a fresh fetch from Supabase ----
-with st.expander("🔍 Debug: Compare with Supabase row-by-row"):
-    if "date" in df.columns:
-        dates = df["date"].astype(str).unique().tolist()
-        pick = st.selectbox("Pick a date to compare", dates[::-1])  # show recent first
-        if pick:
-            # Row displayed in the grid (after rounding)
-            shown = df[df["date"].astype(str) == pick]
-            st.write("Row in the app (post-rounding/filters):")
-            st.dataframe(shown, width='stretch')
-
-            # Fresh fetch from Supabase for the exact same date
-            fresh = sb.table(table_name).select("*").eq("date", pick).execute()
-            fresh_df = pd.DataFrame(fresh.data)
-            st.write("Raw row fetched directly from Supabase (no rounding):")
-            st.dataframe(fresh_df, width='stretch')
-    else:
-        st.info("No 'date' column available to compare.")
