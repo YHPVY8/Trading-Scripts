@@ -4,7 +4,7 @@ import pandas as pd
 from supabase import create_client
 
 # ---- CONFIG ----
-st.set_page_config(page_title="Trading Dashboard", layout="wide")
+st.set_page_config(page_title="📊 Trading Dashboard", layout="wide")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -18,6 +18,8 @@ TABLES = {
     "4h ES": ("es_4hr", "time"),
     "Daily Pivots": ("es_daily_pivot_levels", "date"),
     "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
+    "2h Pivots": ("es_2hr_pivot_levels", "time"),
+    "4h Pivots": ("es_4hr_pivot_levels", "time"),
 }
 
 st.title("📊 Trading Dashboard")
@@ -42,9 +44,9 @@ if df.empty:
     st.error("No data returned.")
     st.stop()
 
-# --- Sort so latest is at bottom (ascending time) ---
+# --- Sort so latest is at bottom ---
 if date_col in df.columns:
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.sort_values(date_col).reset_index(drop=True)
 
 # --- CLEANUP PER DATASET ---
@@ -57,7 +59,7 @@ if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 if "time" in df.columns:
-    # For daily/weekly just show date; for intraday show yyyy-mm-ddTHH:MM
+    # Daily & Weekly ES just show date; others show yyyy-mm-ddTHH:MM
     if choice in ["Daily ES", "Weekly ES"]:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%d")
     else:
@@ -67,8 +69,8 @@ if "time" in df.columns:
 if choice == "Daily Pivots":
     keep_cols = [
         "date", "day",
-        "hit_pivot", "hit_r025", "hit_s025", "hit_r05", "hit_s05",
-        "hit_r1", "hit_s1", "hit_r15", "hit_s15", "hit_r2", "hit_s2", "hit_r3", "hit_s3"
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
     ]
     df = df[[c for c in keep_cols if c in df.columns]]
 
@@ -76,12 +78,21 @@ if choice == "Daily Pivots":
 if choice == "Weekly Pivots":
     keep_cols = [
         "date",
-        "hit_pivot", "hit_r025", "hit_s025", "hit_r05", "hit_s05",
-        "hit_r1", "hit_s1", "hit_r15", "hit_s15", "hit_r2", "hit_s2", "hit_r3", "hit_s3"
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
     ]
     df = df[[c for c in keep_cols if c in df.columns]]
 
-# 5️⃣ Restrict columns for ES datasets (daily/weekly/intraday)
+# 5️⃣ Restrict columns for 2h & 4h Pivots
+if choice in ["2h Pivots", "4h Pivots"]:
+    keep_cols = [
+        "time","globex_date","day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
+    ]
+    df = df[[c for c in keep_cols if c in df.columns]]
+
+# 6️⃣ Restrict columns for ES price datasets
 if choice in ["Daily ES", "Weekly ES", "30m ES", "2h ES", "4h ES"]:
     keep = ["time","open","high","low","close","200MA","50MA","20MA","10MA","5MA","Volume","ATR"]
     df = df[[c for c in keep if c in df.columns]]
@@ -130,7 +141,7 @@ def bold_headers(styler):
         [{"selector": "thead th", "props": [("font-weight", "bold")]}]
     )
 
-if choice in ["Daily Pivots", "Weekly Pivots"]:
+if choice in ["Daily Pivots", "Weekly Pivots", "2h Pivots", "4h Pivots"]:
     styled = df.style.map(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
     styled = bold_headers(styled)
     st.dataframe(styled, use_container_width=True, height=600)
