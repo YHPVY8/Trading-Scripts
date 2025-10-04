@@ -21,6 +21,16 @@ TABLES = {
     "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
 }
 
+# Columns we want to show for pivot tables
+PIVOT_COLS = [
+    "date","day",
+    "phi","plo","pcl","pivot",
+    "r025","s025","r05","s05",
+    "r1","s1","r15","s15","r2","s2","r3","s3",
+    "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+    "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3",
+]
+
 st.title("📊 Trading Dashboard")
 
 # ---- Sidebar ----
@@ -30,33 +40,36 @@ limit = st.sidebar.number_input("Number of rows to load", value=1000, min_value=
 table_name, date_col = TABLES[choice]
 
 # ---- Load ----
-response = (
+resp = (
     sb.table(table_name)
     .select("*")
-    .order(date_col, desc=True)  # get most recent rows first
+    .order(date_col, desc=True)  # newest first from server
     .limit(limit)
     .execute()
 )
-df = pd.DataFrame(response.data)
+df = pd.DataFrame(resp.data)
 
 if df.empty:
     st.error("No data returned.")
     st.stop()
 
-# Sort ascending so newest is at bottom
+# Sort ascending so newest ends at bottom in the view
 df = df.sort_values(date_col)
 
-if choice == "Daily Pivots":
-    keep_cols = [
-        "date","day",
-        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
-    ]
-    df = df[[c for c in keep_cols if c in df.columns]]
+# If we're on a pivots table, restrict to known pivot cols (that exist)
+if choice in ("Daily Pivots", "Weekly Pivots"):
+    keep = [c for c in PIVOT_COLS if c in df.columns]
+    df = df[keep]
 
-# Round numeric columns to 2 decimals
-for col in df.select_dtypes(include=["float", "float64", "int"]).columns:
-    df[col] = df[col].round(2)
+# --- Coerce numeric + round 2dp (won’t touch bool hit_* columns)
+numeric_cols = df.select_dtypes(include=["float", "float64", "int", "int64"]).columns.tolist()
+# If some numeric fields arrived as strings, coerce them before rounding
+for c in df.columns:
+    if c not in ("date", "day") and not c.startswith("hit"):
+        df[c] = pd.to_numeric(df[c], errors="ignore")
+
+df[numeric_cols] = df[numeric_cols].apply(lambda s: pd.to_numeric(s, errors="coerce"))
+df[numeric_cols] = df[numeric_cols].round(2)
 
 # --- Multi-condition filter ---
 filters = []
@@ -70,7 +83,7 @@ for n in range(num_filters):
     op = st.sidebar.selectbox(f"Op #{n+1}", ["equals","contains","greater than","less than"], key=f"fop{n}")
     val = st.sidebar.text_input(f"Value #{n+1}", key=f"fval{n}")
     if col and op and val:
-        filters.append((col,op,val))
+        filters.append((col, op, val))
 
 for col, op, val in filters:
     if op == "equals":
@@ -101,3 +114,22 @@ st.download_button(
     file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
     mime="text/csv"
 )
+
+# ---- Debug / QA: compare a single row with a fresh fetch from Supabase ----
+with st.expander("🔍 Debug: Compare with Supabase row-by-row"):
+    if "date" in df.columns:
+        dates = df["date"].astype(str).unique().tolist()
+        pick = st.selectbox("Pick a date to compare", dates[::-1])  # show recent first
+        if pick:
+            # Row displayed in the grid (after rounding)
+            shown = df[df["date"].astype(str) == pick]
+            st.write("Row in the app (post-rounding/filters):")
+            st.dataframe(shown, width='stretch')
+
+            # Fresh fetch from Supabase for the exact same date
+            fresh = sb.table(table_name).select("*").eq("date", pick).execute()
+            fresh_df = pd.DataFrame(fresh.data)
+            st.write("Raw row fetched directly from Supabase (no rounding):")
+            st.dataframe(fresh_df, width='stretch')
+    else:
+        st.info("No 'date' column available to compare.")
