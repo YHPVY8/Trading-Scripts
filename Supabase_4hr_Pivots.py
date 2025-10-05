@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-import os
 import pandas as pd
 from supabase import create_client, Client
 
@@ -17,19 +16,15 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ---------- helpers ----------
 def fetch_all_rows(table: str, order_col: str = "time", page_size: int = 1000) -> pd.DataFrame:
-    """
-    Pull ALL rows from a table by paginating with .range().
-    Supabase/PostgREST caps SELECT at 1000 rows unless you specify a range.
-    """
+    """Pull ALL rows from a table by paginating with .range()."""
     all_chunks = []
     start = 0
     while True:
-        # range is inclusive; end = start + page_size - 1
         end = start + page_size - 1
         resp = (
             supabase.table(table)
             .select("*")
-            .order(order_col, desc=False)   # oldest -> newest
+            .order(order_col, desc=False)
             .range(start, end)
             .execute()
         )
@@ -47,21 +42,25 @@ def fetch_all_rows(table: str, order_col: str = "time", page_size: int = 1000) -
         df = df.sort_values(order_col).reset_index(drop=True)
     return df
 
-# ---------- Step 1: Load ALL source data (daily prices) ----------
-df = fetch_all_rows("daily_es", order_col="time", page_size=1000)
+# ---------- Step 1: Load ALL source data (4hr prices) ----------
+df = fetch_all_rows("es_4hr", order_col="time", page_size=1000)
 if df.empty:
-    raise RuntimeError("daily_es returned no rows; cannot compute pivots.")
+    raise RuntimeError("es_4hr returned no rows; cannot compute pivots.")
 
-print(f"Loaded {len(df):,} rows from daily_es.")
+print(f"Loaded {len(df):,} rows from es_4hr.")
 print(f"Date range: {df['time'].min().date()} → {df['time'].max().date()}")
 
-# ---------- Step 2: Add extra columns ----------
-df["Day"] = df["time"].dt.strftime("%A")
-df["date"] = df["time"].dt.date  # Python date (we'll stringify just before upload)
+# ---------- Step 2: Add Globex Date & Day ----------
+# Globex date: times >=18:00 belong to next calendar day; else same day
+df["time"] = pd.to_datetime(df["time"])
+df["globex_date"] = df["time"].apply(
+    lambda t: (t + pd.Timedelta(days=1)).date() if t.hour >= 18 else t.date()
+)
+df["day"] = pd.to_datetime(df["globex_date"]).dt.strftime("%A")
 
-# ---------- Step 3: Compute pivots for ALL rows (except first, needs prior day) ----------
+# ---------- Step 3: Compute pivots ----------
 results = []
-for i in range(1, len(df)):  # start at 1 because we need prior day (i-1)
+for i in range(1, len(df)):
     pHi = df.loc[i - 1, "high"]
     pLo = df.loc[i - 1, "low"]
     pCL = df.loc[i - 1, "close"]
@@ -100,8 +99,9 @@ for i in range(1, len(df)):  # start at 1 because we need prior day (i-1)
     }
 
     results.append({
-        "date": df.loc[i, "date"],  # Python date for now
-        "day": df.loc[i, "Day"],
+        "time": df.loc[i, "time"],  # will convert below
+        "globex_date": df.loc[i, "globex_date"],
+        "day": df.loc[i, "day"],
         "phi":   round(pHi,    2),
         "plo":   round(pLo,    2),
         "pcl":   round(pCL,    2),
@@ -124,20 +124,23 @@ for i in range(1, len(df)):  # start at 1 because we need prior day (i-1)
 df_results = pd.DataFrame(results)
 print(f"Computed {len(df_results):,} pivot rows.")
 
-# ---------- Step 4: Stringify date, then UPSERT in batches (≤1000) ----------
+# ---------- Step 4: Convert datetimes to strings & UPSERT ----------
 if not df_results.empty:
-    df_results["date"] = df_results["date"].astype(str)
+    if "time" in df_results.columns:
+        df_results["time"] = pd.to_datetime(df_results["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M:%S")
+    if "globex_date" in df_results.columns:
+        df_results["globex_date"] = pd.to_datetime(df_results["globex_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
     BATCH = 1000
     total = len(df_results)
     for start in range(0, total, BATCH):
         end = start + BATCH
         batch = df_results.iloc[start:end]
-        supabase.table("es_daily_pivot_levels") \
-            .upsert(batch.to_dict(orient="records"), on_conflict=["date"]) \
+        supabase.table("es_4hr_pivot_levels") \
+            .upsert(batch.to_dict(orient="records"), on_conflict=["time"]) \
             .execute()
         print(f"  - Upserted rows {start+1:,}–{min(end, total):,}")
 
-    print(f"Upserted {total:,} rows into es_daily_pivot_levels.")
+    print(f"Upserted {total:,} rows into es_4hr_pivot_levels.")
 else:
     print("No data to insert.")

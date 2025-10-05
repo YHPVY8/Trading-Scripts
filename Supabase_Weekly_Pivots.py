@@ -47,12 +47,12 @@ def fetch_all_rows(table: str, order_col: str = "time", page_size: int = 1000) -
         df = df.sort_values(order_col).reset_index(drop=True)
     return df
 
-# ---------- Step 1: Load ALL source data (daily prices) ----------
-df = fetch_all_rows("daily_es", order_col="time", page_size=1000)
+# ---------- Step 1: Load ALL source data (weekly prices) ----------
+df = fetch_all_rows("es_weekly", order_col="time", page_size=1000)
 if df.empty:
-    raise RuntimeError("daily_es returned no rows; cannot compute pivots.")
+    raise RuntimeError("es_weekly returned no rows; cannot compute pivots.")
 
-print(f"Loaded {len(df):,} rows from daily_es.")
+print(f"Loaded {len(df):,} rows from es_weekly.")
 print(f"Date range: {df['time'].min().date()} → {df['time'].max().date()}")
 
 # ---------- Step 2: Add extra columns ----------
@@ -133,11 +133,11 @@ if not df_results.empty:
     for start in range(0, total, BATCH):
         end = start + BATCH
         batch = df_results.iloc[start:end]
-        supabase.table("es_daily_pivot_levels") \
+        supabase.table("es_weekly_pivot_levels") \
             .upsert(batch.to_dict(orient="records"), on_conflict=["date"]) \
             .execute()
         print(f"  - Upserted rows {start+1:,}–{min(end, total):,}")
 
-    print(f"Upserted {total:,} rows into es_daily_pivot_levels.")
+    print(f"Upserted {total:,} rows into es_weekly_pivot_levels.")
 else:
     print("No data to insert.")
