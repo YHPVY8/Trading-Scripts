@@ -20,6 +20,7 @@ TABLES = {
     "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
     "2h Pivots": ("es_2hr_pivot_levels", "time"),
     "4h Pivots": ("es_4hr_pivot_levels", "time"),
+    "30m Pivots": ("es_30m_pivot_levels", "time"),
 }
 
 st.title("📊 Trading Dashboard")
@@ -84,7 +85,7 @@ if choice == "Weekly Pivots":
     df = df[[c for c in keep_cols if c in df.columns]]
 
 # 5️⃣ Restrict columns for 2h & 4h Pivots
-if choice in ["2h Pivots", "4h Pivots"]:
+if choice in ["2h Pivots", "4h Pivots", "30m Pivots"]:
     keep_cols = [
         "time","globex_date","day",
         "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
@@ -141,7 +142,7 @@ def bold_headers(styler):
         [{"selector": "thead th", "props": [("font-weight", "bold")]}]
     )
 
-if choice in ["Daily Pivots", "Weekly Pivots", "2h Pivots", "4h Pivots"]:
+if choice in ["Daily Pivots", "Weekly Pivots", "2h Pivots", "4h Pivots", "30m Pivots"]:
     styled = df.style.map(color_hits, subset=[c for c in df.columns if c.startswith("hit")])
     styled = bold_headers(styled)
     st.dataframe(styled, use_container_width=True, height=600)
