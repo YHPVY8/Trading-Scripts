@@ -52,12 +52,11 @@ if date_col in df.columns:
     df = df.sort_values(date_col).reset_index(drop=True)
 
 # --- CLEANUP PER DATASET ---
-
-# Remove id if present
-if "id" in df.columns:
+# 1️⃣ Remove 'id' from Daily ES
+if choice == "Daily ES" and "id" in df.columns:
     df = df.drop(columns=["id"])
 
-# Date/time cleanup
+# 2️⃣ Standardize date/time formatting
 if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
@@ -67,57 +66,75 @@ if "time" in df.columns:
     else:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M")
 
-# ---- Range Extensions View ----
-if choice == "Range Extensions":
-    keep_cols = [
-        "date", "day", "range", "14_Day_Avg_Range", "range_gt_avg", "range_gt_80_avg",
-        "op_lo", "op_lo_14_avg", "op_lo_gt_avg", "range_gt_80_op_lo",
-        "hi_op", "hi_op_14_avg", "hi_op_gt_avg", "range_gt_80_hi_op",
-        "hit_both_80", "hit_both_14_avg",
-        "range_gt_120_avg", "range_gt_120_op_lo", "range_gt_120_hi_op"
-    ]
+# 3️⃣ Restrict columns for pivots
+if choice == "Daily Pivots":
+    keep_cols = ["date", "day", "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
     df = df[[c for c in keep_cols if c in df.columns]]
 
-# ---- Pivots (Daily/Weekly/2h/4h/30m) ----
-elif choice in ["Daily Pivots", "Weekly Pivots", "2h Pivots", "4h Pivots", "30m Pivots"]:
-    keep_cols = [
-        "date" if "date" in df.columns else "time",
-        "day" if "day" in df.columns else None,
-        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
-    ]
+elif choice == "Weekly Pivots":
+    keep_cols = ["date", "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
     df = df[[c for c in keep_cols if c in df.columns]]
 
-# ---- ES price datasets ----
+elif choice in ["2h Pivots", "4h Pivots", "30m Pivots"]:
+    keep_cols = ["time","globex_date","day",
+                 "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
+    df = df[[c for c in keep_cols if c in df.columns]]
+
+# 4️⃣ Restrict columns for ES datasets
 elif choice in ["Daily ES", "Weekly ES", "30m ES", "2h ES", "4h ES"]:
     keep = ["time","open","high","low","close","200MA","50MA","20MA","10MA","5MA","Volume","ATR"]
     df = df[[c for c in keep if c in df.columns]]
 
-# ---- Numeric Formatting ----
-numeric_cols = [c for c in df.columns if df[c].dtype in ["float64", "int64"]]
+# 5️⃣ Restrict columns for Range Extensions
+elif choice == "Range Extensions":
+    keep = [
+        "date","day","range","14_Day_Avg_Range","range_gt_avg","range_gt_80_avg",
+        "op_lo","op_lo_14_avg","op_lo_gt_avg","range_gt_80_op_lo",
+        "hi_op","hi_op_14_avg","hi_op_gt_avg","range_gt_80_hi_op",
+        "hit_both_80","hit_both_14_avg",
+        "range_gt_120_avg","range_gt_120_op_lo","range_gt_120_hi_op"
+    ]
+    df = df[[c for c in keep if c in df.columns]]
+
+# ---- Formatting numeric columns ----
+numeric_cols = [
+    "range","14_Day_Avg_Range","op_lo","op_lo_14_avg","hi_op","hi_op_14_avg"
+]
 for col in numeric_cols:
-    df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
+    if col in df.columns:
+        df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
 
-if "Volume" in df.columns:
-    df["Volume"] = df["Volume"].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else x)
+# ---- Highlight + Bold Headers ----
+def color_hits(val):
+    if val is True or str(val).lower() == "true":
+        return "background-color: #98FB98"
+    return ""
 
-# ---- Multi-filter Sidebar ----
-filters = []
-num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
-if st.sidebar.button("Clear Filters"):
-    st.rerun()
+def bold_headers(styler):
+    return styler.set_table_styles(
+        [{"selector": "thead th", "props": [("font-weight", "bold")]}]
+    )
 
-for n in range(num_filters):
-    col = st.sidebar.selectbox(f"Column #{n+1}", df.columns, key=f"fcol{n}")
-    op = st.sidebar.selectbox(f"Op #{n+1}", ["equals","contains","greater than","less than"], key=f"fop{n}")
-    val = st.sidebar.text_input(f"Value #{n+1}", key=f"fval{n}")
-    if col and op and val:
-        filters.append((col, op, val))
+# ---- Render table ----
+if choice in [
+    "Daily Pivots","Weekly Pivots","2h Pivots","4h Pivots",
+    "30m Pivots","Range Extensions"
+]:
+    hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit", "gt", ">"])]
+    styled = df.style.map(color_hits, subset=hit_cols)
+    styled = bold_headers(styled)
+    st.dataframe(styled, use_container_width=True, height=600)
+else:
+    styled = bold_headers(df.style)
+    st.dataframe(styled, use_container_width=True, height=600)
 
-for col, op, val in filters:
-    if op == "equals":
-        df = df[df[col].astype(str) == val]
-    elif op == "contains":
-        df = df[df[col].astype(str).str.contains(val, case=False, na=False)]
-    elif op == "greater than":
-        df = df[pd.to_numeric(df[col], errors='coerce') > float(val
+# ---- Download button ----
+st.download_button(
+    "💾 Download filtered CSV",
+    df.to_csv(index=False).encode("utf-8"),
+    file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
+    mime="text/csv"
+)
