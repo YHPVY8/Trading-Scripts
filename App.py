@@ -52,11 +52,9 @@ if date_col in df.columns:
     df = df.sort_values(date_col).reset_index(drop=True)
 
 # --- CLEANUP PER DATASET ---
-# 1️⃣ Remove 'id' from Daily ES
 if choice == "Daily ES" and "id" in df.columns:
     df = df.drop(columns=["id"])
 
-# 2️⃣ Standardize date/time formatting
 if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
@@ -66,29 +64,29 @@ if "time" in df.columns:
     else:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M")
 
-# 3️⃣ Restrict columns for pivots
+# --- Restrict columns ---
 if choice == "Daily Pivots":
-    keep_cols = ["date", "day", "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
+    keep_cols = ["date", "day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
     df = df[[c for c in keep_cols if c in df.columns]]
 
 elif choice == "Weekly Pivots":
-    keep_cols = ["date", "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
+    keep_cols = ["date",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
     df = df[[c for c in keep_cols if c in df.columns]]
 
 elif choice in ["2h Pivots", "4h Pivots", "30m Pivots"]:
     keep_cols = ["time","globex_date","day",
-                 "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
     df = df[[c for c in keep_cols if c in df.columns]]
 
-# 4️⃣ Restrict columns for ES datasets
 elif choice in ["Daily ES", "Weekly ES", "30m ES", "2h ES", "4h ES"]:
     keep = ["time","open","high","low","close","200MA","50MA","20MA","10MA","5MA","Volume","ATR"]
     df = df[[c for c in keep if c in df.columns]]
 
-# 5️⃣ Restrict columns for Range Extensions
 elif choice == "Range Extensions":
     keep = [
         "date","day","range","14_Day_Avg_Range","range_gt_avg","range_gt_80_avg",
@@ -99,13 +97,13 @@ elif choice == "Range Extensions":
     ]
     df = df[[c for c in keep if c in df.columns]]
 
-# ---- Formatting numeric columns ----
-numeric_cols = [
-    "range","14_Day_Avg_Range","op_lo","op_lo_14_avg","hi_op","hi_op_14_avg"
-]
-for col in numeric_cols:
-    if col in df.columns:
-        df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
+# ---- Format all numeric columns ----
+for col in df.columns:
+    if df[col].dtype in ["float64", "float32", "int64", "int32"]:
+        if "volume" in col.lower():
+            df[col] = df[col].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else x)
+        else:
+            df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
 
 # ---- Highlight + Bold Headers ----
 def color_hits(val):
@@ -118,7 +116,7 @@ def bold_headers(styler):
         [{"selector": "thead th", "props": [("font-weight", "bold")]}]
     )
 
-# ---- Render table ----
+# ---- Display ----
 if choice in [
     "Daily Pivots","Weekly Pivots","2h Pivots","4h Pivots",
     "30m Pivots","Range Extensions"
