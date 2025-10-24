@@ -126,27 +126,53 @@ for col, op, val in filters:
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
 
-# ---- Highlight + Bold Headers ----
+# -------------------- Styling (Headers + Borders + Highlights) --------------------
 def color_hits(val):
     if val is True or str(val).lower() == "true":
         return "background-color: #98FB98"
     return ""
 
-def bold_headers(styler):
-    return styler.set_table_styles([{"selector": "thead th", "props": [("font-weight", "bold")]}])
+# map of which columns should have a THICK right border by table
+# (We mirror your Daily Pivots request and apply the same breaks to 2h/4h/30m Pivots if those columns exist.)
+THICK_BORDER_AFTER = {
+    "Daily Pivots":     ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "2h Pivots":        ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "4h Pivots":        ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "30m Pivots":       ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+}
 
-# ---- Display ----
-if choice in [
-    "Daily Pivots","Weekly Pivots","2h Pivots","4h Pivots",
-    "30m Pivots","Range Extensions"
-]:
-    hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit","gt",">"])]
-    styled = df.style.map(color_hits, subset=hit_cols)
-    styled = bold_headers(styled)
-    st.dataframe(styled, use_container_width=True, height=600)
-else:
-    styled = bold_headers(df.style)
-    st.dataframe(styled, use_container_width=True, height=600)
+def make_excelish_styler(df: pd.DataFrame, choice: str) -> pd.io.formats.style.Styler:
+    # hide the index so nth-child targets visible columns correctly
+    styler = df.style.hide(axis="index")
+
+    # baseline: bold black headers + light grid borders everywhere
+    table_styles = [
+        {"selector": "table", "props": [("border-collapse", "collapse")]},
+        {"selector": "th, td", "props": [("border", "1px solid #E5E7EB"), ("padding", "6px 8px")]},
+        {"selector": "thead th", "props": [("font-weight", "700"), ("color", "#000")]}
+    ]
+
+    # add thick right borders for the specified columns (if they exist)
+    border_after = THICK_BORDER_AFTER.get(choice, [])
+    border_after = [c for c in border_after if c in df.columns]
+    nths = [df.columns.get_loc(c) + 1 for c in border_after]  # 1-based positions
+    for n in nths:
+        table_styles.append({"selector": f"td:nth-child({n})", "props": [("border-right", "3px solid #000")]})
+        table_styles.append({"selector": f"th:nth-child({n})", "props": [("border-right", "3px solid #000")]})
+
+    styler = styler.set_table_styles(table_styles)
+
+    # Hit highlighting for "hit"/"gt" columns (kept from your original)
+    if choice in ["Daily Pivots","Weekly Pivots","2h Pivots","4h Pivots","30m Pivots","Range Extensions"]:
+        hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit","gt",">"])]
+        if hit_cols:
+            styler = styler.map(color_hits, subset=hit_cols)
+
+    return styler
+
+# ---- Display (render styled HTML so CSS is applied) ----
+styled = make_excelish_styler(df, choice)
+st.markdown(styled.to_html(), unsafe_allow_html=True)
 
 # ---- Download button ----
 st.download_button(
