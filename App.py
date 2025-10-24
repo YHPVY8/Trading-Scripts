@@ -170,9 +170,41 @@ def make_excelish_styler(df: pd.DataFrame, choice: str) -> pd.io.formats.style.S
 
     return styler
 
-# ---- Display (render styled HTML so CSS is applied) ----
+# ---- Display (render styled HTML so CSS is applied and header stays fixed) ----
 styled = make_excelish_styler(df, choice)
-st.markdown(styled.to_html(), unsafe_allow_html=True)
+html_table = styled.to_html()
+
+# Add scroll + sticky header behavior
+st.markdown("""
+    <style>
+    .scroll-table-container {
+        max-height: 600px;           /* same as your previous st.dataframe height */
+        overflow-y: auto;
+        border: 1px solid #E5E7EB;
+    }
+    .scroll-table-container table {
+        width: 100%;
+    }
+    .scroll-table-container thead th {
+        position: sticky;
+        top: 0;
+        background-color: white !important;
+        z-index: 2;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Render the scrollable table
+st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
+
+# ---- Download button ----
+st.download_button(
+    "💾 Download filtered CSV",
+    df.to_csv(index=False).encode("utf-8"),
+    file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
+    mime="text/csv"
+)
+
 
 # ---- Download button ----
 st.download_button(
