@@ -24,7 +24,7 @@ TABLES = {
     "Range Extensions": ("es_range_extensions", "date"),
 }
 
-st.title("📊 Trading Dashboard")
+st.title("Trading Dashboard")
 
 # ---- Sidebar ----
 choice = st.sidebar.selectbox("Select data set", list(TABLES.keys()))
