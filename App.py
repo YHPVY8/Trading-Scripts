@@ -204,12 +204,3 @@ st.download_button(
     file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
     mime="text/csv"
 )
-
-
-# ---- Download button ----
-st.download_button(
-    "💾 Download filtered CSV",
-    df.to_csv(index=False).encode("utf-8"),
-    file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
-    mime="text/csv"
-)
