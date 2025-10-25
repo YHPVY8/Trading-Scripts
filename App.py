@@ -4,7 +4,7 @@ import pandas as pd
 from supabase import create_client
 
 # ---- CONFIG ----
-st.set_page_config(page_title="📊 Trading Dashboard", layout="wide")
+st.set_page_config(page_title="Trading Dashboard", layout="wide")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
@@ -132,37 +132,33 @@ def color_hits(val):
         return "background-color: #98FB98"
     return ""
 
-# map of which columns should have a THICK right border by table
-# (We mirror your Daily Pivots request and apply the same breaks to 2h/4h/30m Pivots if those columns exist.)
+# Columns that should have a THICK right border by table
 THICK_BORDER_AFTER = {
-    "Daily Pivots":     ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "2h Pivots":        ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "4h Pivots":        ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "30m Pivots":       ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "2h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
 }
 
 def make_excelish_styler(df: pd.DataFrame, choice: str) -> pd.io.formats.style.Styler:
-    # hide the index so nth-child targets visible columns correctly
     styler = df.style.hide(axis="index")
-
-    # baseline: bold black headers + light grid borders everywhere
     table_styles = [
         {"selector": "table", "props": [("border-collapse", "collapse")]},
         {"selector": "th, td", "props": [("border", "1px solid #E5E7EB"), ("padding", "6px 8px")]},
         {"selector": "thead th", "props": [("font-weight", "700"), ("color", "#000")]}
     ]
 
-    # add thick right borders for the specified columns (if they exist)
+    # Add thick right borders for key columns
     border_after = THICK_BORDER_AFTER.get(choice, [])
     border_after = [c for c in border_after if c in df.columns]
-    nths = [df.columns.get_loc(c) + 1 for c in border_after]  # 1-based positions
+    nths = [df.columns.get_loc(c) + 1 for c in border_after]
     for n in nths:
         table_styles.append({"selector": f"td:nth-child({n})", "props": [("border-right", "3px solid #000")]})
         table_styles.append({"selector": f"th:nth-child({n})", "props": [("border-right", "3px solid #000")]})
 
     styler = styler.set_table_styles(table_styles)
 
-    # Hit highlighting for "hit"/"gt" columns (kept from your original)
+    # Highlight hits
     if choice in ["Daily Pivots","Weekly Pivots","2h Pivots","4h Pivots","30m Pivots","Range Extensions"]:
         hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit","gt",">"])]
         if hit_cols:
@@ -170,15 +166,14 @@ def make_excelish_styler(df: pd.DataFrame, choice: str) -> pd.io.formats.style.S
 
     return styler
 
-# ---- Display (render styled HTML so CSS is applied and header stays fixed) ----
+# ---- Display (sticky header + scrollable container) ----
 styled = make_excelish_styler(df, choice)
 html_table = styled.to_html()
 
-# Add scroll + sticky header behavior
 st.markdown("""
     <style>
     .scroll-table-container {
-        max-height: 600px;           /* same as your previous st.dataframe height */
+        max-height: 600px;
         overflow-y: auto;
         border: 1px solid #E5E7EB;
     }
@@ -194,13 +189,13 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Render the scrollable table
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
 
-# ---- Download button ----
+# ---- Download button (unique key to avoid duplicate element error) ----
 st.download_button(
     "💾 Download filtered CSV",
     df.to_csv(index=False).encode("utf-8"),
     file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
-    mime="text/csv"
+    mime="text/csv",
+    key=f"download_{choice.lower().replace(' ','_')}"   # unique key per dataset
 )
