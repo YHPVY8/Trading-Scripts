@@ -140,6 +140,97 @@ THICK_BORDER_AFTER = {
     "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
 }
 
+# -------- Display-only header labels (for pivots) --------
+HEADER_LABELS = {
+    "Daily Pivots": {
+        "date": "Date",
+        "day": "Day",
+        "hit_pivot": "Pivot",
+        "hit_r025": "R025",
+        "hit_s025": "S025",
+        "hit_r05": "R0.5",
+        "hit_s05": "S0.5",
+        "hit_r1": "R1",
+        "hit_s1": "S1",
+        "hit_r15": "R1.5",
+        "hit_s15": "S1.5",
+        "hit_r2": "R2",
+        "hit_s2": "S2",
+        "hit_r3": "R3",
+        "hit_s3": "S3",
+    },
+    "Weekly Pivots": {
+        "date": "Date",
+        "hit_pivot": "Pivot",
+        "hit_r025": "R025",
+        "hit_s025": "S025",
+        "hit_r05": "R0.5",
+        "hit_s05": "S0.5",
+        "hit_r1": "R1",
+        "hit_s1": "S1",
+        "hit_r15": "R1.5",
+        "hit_s15": "S1.5",
+        "hit_r2": "R2",
+        "hit_s2": "S2",
+        "hit_r3": "R3",
+        "hit_s3": "S3",
+    },
+    "2h Pivots": {
+        "time": "Time",
+        "globex_date": "Globex Date",
+        "day": "Day",
+        "hit_pivot": "Pivot",
+        "hit_r025": "R025",
+        "hit_s025": "S025",
+        "hit_r05": "R0.5",
+        "hit_s05": "S0.5",
+        "hit_r1": "R1",
+        "hit_s1": "S1",
+        "hit_r15": "R1.5",
+        "hit_s15": "S1.5",
+        "hit_r2": "R2",
+        "hit_s2": "S2",
+        "hit_r3": "R3",
+        "hit_s3": "S3",
+    },
+    "4h Pivots": {
+        "time": "Time",
+        "globex_date": "Globex Date",
+        "day": "Day",
+        "hit_pivot": "Pivot",
+        "hit_r025": "R025",
+        "hit_s025": "S025",
+        "hit_r05": "R0.5",
+        "hit_s05": "S0.5",
+        "hit_r1": "R1",
+        "hit_s1": "S1",
+        "hit_r15": "R1.5",
+        "hit_s15": "S1.5",
+        "hit_r2": "R2",
+        "hit_s2": "S2",
+        "hit_r3": "R3",
+        "hit_s3": "S3",
+    },
+    "30m Pivots": {
+        "time": "Time",
+        "globex_date": "Globex Date",
+        "day": "Day",
+        "hit_pivot": "Pivot",
+        "hit_r025": "R025",
+        "hit_s025": "S025",
+        "hit_r05": "R0.5",
+        "hit_s05": "S0.5",
+        "hit_r1": "R1",
+        "hit_s1": "S1",
+        "hit_r15": "R1.5",
+        "hit_s15": "S1.5",
+        "hit_r2": "R2",
+        "hit_s2": "S2",
+        "hit_r3": "R3",
+        "hit_s3": "S3",
+    },
+}
+
 # NOTE: Avoid Styler type hints that touch pandas.io.formats.* to prevent env-specific AttributeError.
 def make_excelish_styler(df: pd.DataFrame, choice: str):
     styler = df.style.hide(axis="index")
@@ -170,6 +261,12 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
 # ---- Display (sticky header + scrollable container) ----
 styled = make_excelish_styler(df, choice)
 html_table = styled.to_html()
+
+# ---- Swap header text (display-only) for all Pivots tables ----
+labels = HEADER_LABELS.get(choice, {})
+for orig, new in labels.items():
+    # Replace only header text occurrences
+    html_table = html_table.replace(f">{orig}<", f">{new}<")
 
 st.markdown("""
     <style>
@@ -202,8 +299,6 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-
-
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
 
