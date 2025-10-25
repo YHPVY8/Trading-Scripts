@@ -180,7 +180,9 @@ st.markdown("""
     }
     .scroll-table-container table {
         width: 100%;
+        border-collapse: collapse;
     }
+    /* Header row (title bar) */
     .scroll-table-container thead th {
         position: sticky;
         top: 0;
@@ -192,6 +194,7 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
+
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
 
