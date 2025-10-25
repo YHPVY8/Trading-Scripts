@@ -184,8 +184,8 @@ st.markdown("""
     .scroll-table-container thead th {
         position: sticky;
         top: 0;
-        background-color: #f2f2f2 !important;   /* light grey header */
-        border-bottom: 3px solid #000;          /* black border below header */
+        background-color: #d0d0d0 !important;   /* darker medium grey */
+        border-bottom: 3px solid #000 !important;  /* bold black line below header */
         font-weight: 700;
         color: #000;
         z-index: 2;
