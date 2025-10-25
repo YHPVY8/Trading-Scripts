@@ -132,7 +132,6 @@ def color_hits(val):
         return "background-color: #98FB98"
     return ""
 
-# Columns that should have a THICK right border by table
 THICK_BORDER_AFTER = {
     "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "2h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
@@ -140,7 +139,8 @@ THICK_BORDER_AFTER = {
     "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
 }
 
-def make_excelish_styler(df: pd.DataFrame, choice: str) -> pd.io.formats.style.Styler:
+# NOTE: Avoid Styler type hints that touch pandas.io.formats.* to prevent env-specific AttributeError.
+def make_excelish_styler(df: pd.DataFrame, choice: str):
     styler = df.style.hide(axis="index")
     table_styles = [
         {"selector": "table", "props": [("border-collapse", "collapse")]},
@@ -148,7 +148,7 @@ def make_excelish_styler(df: pd.DataFrame, choice: str) -> pd.io.formats.style.S
         {"selector": "thead th", "props": [("font-weight", "700"), ("color", "#000")]}
     ]
 
-    # Add thick right borders for key columns
+    # Add thick right borders for key columns (only if they exist in df)
     border_after = THICK_BORDER_AFTER.get(choice, [])
     border_after = [c for c in border_after if c in df.columns]
     nths = [df.columns.get_loc(c) + 1 for c in border_after]
@@ -158,7 +158,7 @@ def make_excelish_styler(df: pd.DataFrame, choice: str) -> pd.io.formats.style.S
 
     styler = styler.set_table_styles(table_styles)
 
-    # Highlight hits
+    # Highlight hits/gt columns
     if choice in ["Daily Pivots","Weekly Pivots","2h Pivots","4h Pivots","30m Pivots","Range Extensions"]:
         hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit","gt",">"])]
         if hit_cols:
@@ -197,5 +197,5 @@ st.download_button(
     df.to_csv(index=False).encode("utf-8"),
     file_name=f"{choice.lower().replace(' ','_')}_filtered.csv",
     mime="text/csv",
-    key=f"download_{choice.lower().replace(' ','_')}"   # unique key per dataset
+    key=f"download_{choice.lower().replace(' ','_')}"
 )
