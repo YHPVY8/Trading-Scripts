@@ -137,6 +137,7 @@ THICK_BORDER_AFTER = {
     "2h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
 }
 
 # NOTE: Avoid Styler type hints that touch pandas.io.formats.* to prevent env-specific AttributeError.
