@@ -180,9 +180,7 @@ st.markdown("""
     }
     .scroll-table-container table {
         width: 100%;
-        border-collapse: collapse;
     }
-    /* Header row (title bar) */
     .scroll-table-container thead th {
         position: sticky;
         top: 0;
