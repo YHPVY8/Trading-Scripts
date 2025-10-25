@@ -180,18 +180,29 @@ st.markdown("""
     }
     .scroll-table-container table {
         width: 100%;
+        border-collapse: collapse;
     }
+    /* Sticky header with medium-grey bg + persistent black "bottom border" */
     .scroll-table-container thead th {
         position: sticky;
         top: 0;
-        background-color: #d0d0d0 !important;   /* darker medium grey */
-        border-bottom: 3px solid #000 !important;  /* bold black line below header */
-        font-weight: 700;
+        z-index: 3;
+        background-color: #d0d0d0 !important;      /* medium grey */
         color: #000;
-        z-index: 2;
+        font-weight: 700;
+
+        /* Make the black line part of the background so it can't be overlapped */
+        background-image: linear-gradient(to bottom,
+            rgba(0,0,0,0) calc(100% - 3px),
+            #000 calc(100% - 3px),
+            #000 100%
+        ) !important;
+        background-clip: padding-box;
+        border-bottom: none !important;            /* avoid double lines */
     }
     </style>
 """, unsafe_allow_html=True)
+
 
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
