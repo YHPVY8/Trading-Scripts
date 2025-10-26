@@ -22,6 +22,8 @@ TABLES = {
     "4h Pivots": ("es_4hr_pivot_levels", "time"),
     "30m Pivots": ("es_30m_pivot_levels", "time"),
     "Range Extensions": ("es_range_extensions", "date"),
+    # NEW — your summary table
+    "ES Trade Day Summary": ("es_trade_day_summary", "trade_date"),
 }
 
 st.title("Trading Dashboard")
@@ -47,6 +49,14 @@ if df.empty:
     st.stop()
 
 # --- Sort so latest is at bottom ---
+# UPDATED — be tolerant if the expected date_col isn't present (schema drift safety)
+if date_col not in df.columns:
+    # try a reasonable fallback
+    for fallback in ["date", "time"]:
+        if fallback in df.columns:
+            date_col = fallback
+            break
+
 if date_col in df.columns:
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.sort_values(date_col).reset_index(drop=True)
@@ -55,8 +65,12 @@ if date_col in df.columns:
 if choice == "Daily ES" and "id" in df.columns:
     df = df.drop(columns=["id"])
 
+# Format common date-like columns
 if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+if "trade_date" in df.columns:  # NEW
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 if "time" in df.columns:
     if choice in ["Daily ES", "Weekly ES"]:
@@ -93,6 +107,13 @@ elif choice == "Range Extensions":
         "range_gt_120_avg","range_gt_120_op_lo","range_gt_120_hi_op"
     ]
     df = df[[c for c in keep if c in df.columns]]
+
+# ES Trade Day Summary — no hard restriction so you can see all fields;
+# we just optionally move trade_date/day to the front if present.  # NEW
+elif choice == "ES Trade Day Summary":
+    front = [c for c in ["trade_date","day"] if c in df.columns]
+    others = [c for c in df.columns if c not in front]
+    df = df[front + others]
 
 # ---- Format all numeric columns ----
 for col in df.columns:
@@ -138,98 +159,72 @@ THICK_BORDER_AFTER = {
     "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    # optional borders for summary if you want:
+    # "ES Trade Day Summary": ["trade_date"],
 }
 
-# -------- Display-only header labels (for pivots) --------
 HEADER_LABELS = {
     "Daily Pivots": {
-        "date": "Date",
-        "day": "Day",
-        "hit_pivot": "Pivot",
-        "hit_r025": "R025",
-        "hit_s025": "S025",
-        "hit_r05": "R0.5",
-        "hit_s05": "S0.5",
-        "hit_r1": "R1",
-        "hit_s1": "S1",
-        "hit_r15": "R1.5",
-        "hit_s15": "S1.5",
-        "hit_r2": "R2",
-        "hit_s2": "S2",
-        "hit_r3": "R3",
-        "hit_s3": "S3",
+        "date": "Date", "day": "Day",
+        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
+        "hit_r05": "R0.5", "hit_s05": "S0.5",
+        "hit_r1": "R1", "hit_s1": "S1",
+        "hit_r15": "R1.5", "hit_s15": "S1.5",
+        "hit_r2": "R2", "hit_s2": "S2",
+        "hit_r3": "R3", "hit_s3": "S3",
     },
     "Weekly Pivots": {
         "date": "Date",
-        "hit_pivot": "Pivot",
-        "hit_r025": "R025",
-        "hit_s025": "S025",
-        "hit_r05": "R0.5",
-        "hit_s05": "S0.5",
-        "hit_r1": "R1",
-        "hit_s1": "S1",
-        "hit_r15": "R1.5",
-        "hit_s15": "S1.5",
-        "hit_r2": "R2",
-        "hit_s2": "S2",
-        "hit_r3": "R3",
-        "hit_s3": "S3",
+        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
+        "hit_r05": "R0.5", "hit_s05": "S0.5",
+        "hit_r1": "R1", "hit_s1": "S1",
+        "hit_r15": "R1.5", "hit_s15": "S1.5",
+        "hit_r2": "R2", "hit_s2": "S2",
+        "hit_r3": "R3", "hit_s3": "S3",
     },
     "2h Pivots": {
-        "time": "Time",
-        "globex_date": "Globex Date",
-        "day": "Day",
-        "hit_pivot": "Pivot",
-        "hit_r025": "R025",
-        "hit_s025": "S025",
-        "hit_r05": "R0.5",
-        "hit_s05": "S0.5",
-        "hit_r1": "R1",
-        "hit_s1": "S1",
-        "hit_r15": "R1.5",
-        "hit_s15": "S1.5",
-        "hit_r2": "R2",
-        "hit_s2": "S2",
-        "hit_r3": "R3",
-        "hit_s3": "S3",
+        "time": "Time", "globex_date": "Globex Date", "day": "Day",
+        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
+        "hit_r05": "R0.5", "hit_s05": "S0.5",
+        "hit_r1": "R1", "hit_s1": "S1",
+        "hit_r15": "R1.5", "hit_s15": "S1.5",
+        "hit_r2": "R2", "hit_s2": "S2",
+        "hit_r3": "R3", "hit_s3": "S3",
     },
     "4h Pivots": {
-        "time": "Time",
-        "globex_date": "Globex Date",
-        "day": "Day",
-        "hit_pivot": "Pivot",
-        "hit_r025": "R025",
-        "hit_s025": "S025",
-        "hit_r05": "R0.5",
-        "hit_s05": "S0.5",
-        "hit_r1": "R1",
-        "hit_s1": "S1",
-        "hit_r15": "R1.5",
-        "hit_s15": "S1.5",
-        "hit_r2": "R2",
-        "hit_s2": "S2",
-        "hit_r3": "R3",
-        "hit_s3": "S3",
+        "time": "Time", "globex_date": "Globex Date", "day": "Day",
+        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
+        "hit_r05": "R0.5", "hit_s05": "S0.5",
+        "hit_r1": "R1", "hit_s1": "S1",
+        "hit_r15": "R1.5", "hit_s15": "S1.5",
+        "hit_r2": "R2", "hit_s2": "S2",
+        "hit_r3": "R3", "hit_s3": "S3",
     },
     "30m Pivots": {
-        "time": "Time",
-        "globex_date": "Globex Date",
-        "day": "Day",
-        "hit_pivot": "Pivot",
-        "hit_r025": "R025",
-        "hit_s025": "S025",
-        "hit_r05": "R0.5",
-        "hit_s05": "S0.5",
-        "hit_r1": "R1",
-        "hit_s1": "S1",
-        "hit_r15": "R1.5",
-        "hit_s15": "S1.5",
-        "hit_r2": "R2",
-        "hit_s2": "S2",
-        "hit_r3": "R3",
-        "hit_s3": "S3",
+        "time": "Time", "globex_date": "Globex Date", "day": "Day",
+        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
+        "hit_r05": "R0.5", "hit_s05": "S0.5",
+        "hit_r1": "R1", "hit_s1": "S1",
+        "hit_r15": "R1.5", "hit_s15": "S1.5",
+        "hit_r2": "R2", "hit_s2": "S2",
+        "hit_r3": "R3", "hit_s3": "S3",
     },
+    # (Optional) Add custom header renames for summary later if you want.
 }
+
+# Detect boolean-like columns anywhere in the dataframe (NEW)
+def detect_bool_like_columns(df: pd.DataFrame):
+    bool_cols = []
+    for c in df.columns:
+        s = df[c]
+        if s.dtype == bool:
+            bool_cols.append(c)
+        else:
+            # treat columns as boolean-like if (non-null) values are only True/False strings
+            nonnull = s.dropna().astype(str).str.lower().unique()
+            if len(nonnull) > 0 and set(nonnull).issubset({"true", "false"}):
+                bool_cols.append(c)
+    return bool_cols
 
 # NOTE: Avoid Styler type hints that touch pandas.io.formats.* to prevent env-specific AttributeError.
 def make_excelish_styler(df: pd.DataFrame, choice: str):
@@ -250,11 +245,13 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
 
     styler = styler.set_table_styles(table_styles)
 
-    # Highlight hits/gt columns
-    if choice in ["Daily Pivots","Weekly Pivots","2h Pivots","4h Pivots","30m Pivots","Range Extensions"]:
-        hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit","gt",">"])]
-        if hit_cols:
-            styler = styler.map(color_hits, subset=hit_cols)
+    # UPDATED — Highlight ALL boolean-like cols, plus legacy hit/gt cols
+    bool_cols = detect_bool_like_columns(df)
+    hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit", "gt", ">"])]
+
+    highlight_cols = sorted(set(bool_cols + hit_cols))
+    if highlight_cols:
+        styler = styler.map(color_hits, subset=highlight_cols)
 
     return styler
 
@@ -265,7 +262,6 @@ html_table = styled.to_html()
 # ---- Swap header text (display-only) for all Pivots tables ----
 labels = HEADER_LABELS.get(choice, {})
 for orig, new in labels.items():
-    # Replace only header text occurrences
     html_table = html_table.replace(f">{orig}<", f">{new}<")
 
 st.markdown("""
@@ -284,25 +280,22 @@ st.markdown("""
         position: sticky;
         top: 0;
         z-index: 3;
-        background-color: #d0d0d0 !important;      /* medium grey */
+        background-color: #d0d0d0 !important;
         color: #000;
         font-weight: 700;
-
-        /* Make the black line part of the background so it can't be overlapped */
         background-image: linear-gradient(to bottom,
             rgba(0,0,0,0) calc(100% - 3px),
             #000 calc(100% - 3px),
             #000 100%
         ) !important;
         background-clip: padding-box;
-        border-bottom: none !important;            /* avoid double lines */
+        border-bottom: none !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
 
-# ---- Download button (unique key to avoid duplicate element error) ----
 st.download_button(
     "💾 Download filtered CSV",
     df.to_csv(index=False).encode("utf-8"),
