@@ -1,0 +1,30 @@
+# views.yaml
+ES Trade Day Summary (All):
+  table: es_trade_day_summary
+  date_col: trade_date
+
+Summary — Morning Setup:
+  table: es_trade_day_summary
+  date_col: trade_date
+  keep: [trade_date, day, ONH, ONL, IBH, IBL, gap_dir, gap_size, hit_pivot, hit_r05, hit_s05, hit_r1, hit_s1]
+  labels:
+    trade_date: Trade Date
+    gap_dir: Gap Dir
+    gap_size: Gap Size
+
+Summary — Midday Posture:
+  table: es_trade_day_summary
+  date_col: trade_date
+  keep: [trade_date, day, session_range, avg14_range, range_gt_avg, range_gt_80_avg, op_lo, op_lo_14_avg, op_lo_gt_avg, hi_op, hi_op_14_avg, hi_op_gt_avg, hit_both_80, hit_both_14_avg]
+  labels:
+    session_range: Range
+    avg14_range: 14-Day Avg Range
+
+Summary — Afternoon Targets:
+  table: es_trade_day_summary
+  date_col: trade_date
+  keep: [trade_date, day, rth_high, rth_low, rth_close, range_gt_120_avg, range_gt_120_op_lo, range_gt_120_hi_op, hit_r15, hit_s15, hit_r2, hit_s2, hit_r3, hit_s3]
+  labels:
+    rth_high: RTH High
+    rth_low: RTH Low
+    rth_close: RTH Close
