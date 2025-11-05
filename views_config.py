@@ -1,9 +1,16 @@
 # views_config.py
 from collections import OrderedDict
-import yaml
-from pathlib import Path
 
-# Your existing base tables live here so App.py stays clean
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+def _warn(msg: str):
+    if st:
+        st.info(msg)
+
+# Your fixed, hand-coded base tables stay here.
 BASE_TABLES = OrderedDict({
     "Daily ES": ("daily_es", "time"),
     "Weekly ES": ("es_weekly", "time"),
@@ -18,22 +25,36 @@ BASE_TABLES = OrderedDict({
     "Range Extensions": ("es_range_extensions", "date"),
 })
 
-def _load_yaml_views(path: Path) -> OrderedDict:
-    if not path.exists():
-        return OrderedDict()
-    data = yaml.safe_load(path.read_text()) or {}
-    out = OrderedDict()
-    for view_name, cfg in data.items():
-        out[view_name] = {
-            "table": cfg["table"],
-            "date_col": cfg.get("date_col", "date"),
-            "keep": cfg.get("keep"),
-            "labels": cfg.get("labels", {}) or {},
-        }
-    return out
-
-def build_tables(config_path: str = "views.yaml") -> OrderedDict:
-    """Merge base tables with YAML-defined views."""
+def build_tables(sb=None) -> OrderedDict:
+    """
+    Merge BASE_TABLES with any views stored in Supabase (dashboard_views).
+    Pass the Supabase client from App.py as sb.
+    """
     tables = OrderedDict(BASE_TABLES)
-    tables.update(_load_yaml_views(Path(config_path)))
+    if sb is None:
+        return tables
+
+    try:
+        rows = (
+            sb.table("dashboard_views")
+              .select("*")
+              .eq("is_enabled", True)
+              .order("sort_order")
+              .execute()
+              .data
+        )
+    except Exception as e:
+        _warn("Views table not loaded; using base tables only.")
+        return tables
+
+    for r in rows:
+        view_name = r.get("view_name")
+        if not view_name:
+            continue
+        tables[view_name] = {
+            "table": r.get("table_name"),
+            "date_col": r.get("date_col", "date"),
+            "keep": r.get("keep_columns"),
+            "labels": r.get("labels") or {},
+        }
     return tables
