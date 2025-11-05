@@ -2,3 +2,4 @@ streamlit
 pandas
 supabase
 numpy
+PyYAML==6.0.2
