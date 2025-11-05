@@ -6,6 +6,12 @@ from supabase import create_client
 # NEW: import the tables/view builder
 from views_config import build_tables
 
+import os, pathlib, streamlit as st
+st.sidebar.write("cwd:", os.getcwd())
+st.sidebar.write("pages exists:", os.path.isdir("pages"))
+st.sidebar.write("pages contents:", os.listdir("pages") if os.path.isdir("pages") else "n/a")
+
+
 # ---- CONFIG ----
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
 
