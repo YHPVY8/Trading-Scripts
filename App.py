@@ -3,6 +3,9 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 
+# NEW: import the tables/view builder
+from views_config import build_tables
+
 # ---- CONFIG ----
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
 
@@ -10,21 +13,8 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-TABLES = {
-    "Daily ES": ("daily_es", "time"),
-    "Weekly ES": ("es_weekly", "time"),
-    "30m ES": ("es_30m", "time"),
-    "2h ES": ("es_2hr", "time"),
-    "4h ES": ("es_4hr", "time"),
-    "Daily Pivots": ("es_daily_pivot_levels", "date"),
-    "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
-    "2h Pivots": ("es_2hr_pivot_levels", "time"),
-    "4h Pivots": ("es_4hr_pivot_levels", "time"),
-    "30m Pivots": ("es_30m_pivot_levels", "time"),
-    "Range Extensions": ("es_range_extensions", "date"),
-    # NEW — your summary table
-    "ES Trade Day Summary": ("es_trade_day_summary", "trade_date"),
-}
+# CHANGED: pull base tables + YAML-defined views
+TABLES = build_tables()
 
 st.title("Trading Dashboard")
 
@@ -32,7 +22,17 @@ st.title("Trading Dashboard")
 choice = st.sidebar.selectbox("Select data set", list(TABLES.keys()))
 limit = st.sidebar.number_input("Number of rows to load", value=1000, min_value=100, step=100)
 
-table_name, date_col = TABLES[choice]
+# NEW: normalize the selected config (tuple OR dict)
+cfg = TABLES[choice]
+if isinstance(cfg, tuple):
+    table_name, date_col = cfg
+    keep_cols = None
+    header_labels = {}
+else:
+    table_name = cfg["table"]
+    date_col = cfg.get("date_col", "date")
+    keep_cols = cfg.get("keep")
+    header_labels = cfg.get("labels", {})
 
 # ---- Load ----
 response = (
@@ -48,11 +48,9 @@ if df.empty:
     st.error("No data returned.")
     st.stop()
 
-# --- Sort so latest is at bottom ---
-# UPDATED — be tolerant if the expected date_col isn't present (schema drift safety)
+# --- Sort so latest is at bottom (tolerant to schema drift) ---
 if date_col not in df.columns:
-    # try a reasonable fallback
-    for fallback in ["date", "time"]:
+    for fallback in ["trade_date", "date", "time"]:
         if fallback in df.columns:
             date_col = fallback
             break
@@ -69,7 +67,7 @@ if choice == "Daily ES" and "id" in df.columns:
 if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-if "trade_date" in df.columns:  # NEW
+if "trade_date" in df.columns:
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 if "time" in df.columns:
@@ -78,42 +76,41 @@ if "time" in df.columns:
     else:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M")
 
-# --- Restrict columns ---
+# --- Restrict columns for fixed datasets ---
 if choice == "Daily Pivots":
-    keep_cols = ["date","day","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
-    df = df[[c for c in keep_cols if c in df.columns]]
+    keep_cols_fixed = ["date","day","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+                       "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
+    df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 elif choice == "Weekly Pivots":
-    keep_cols = ["date","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
-    df = df[[c for c in keep_cols if c in df.columns]]
+    keep_cols_fixed = ["date","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+                       "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
+    df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 elif choice in ["2h Pivots","4h Pivots","30m Pivots"]:
-    keep_cols = ["time","globex_date","day","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
-                 "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
-    df = df[[c for c in keep_cols if c in df.columns]]
+    keep_cols_fixed = ["time","globex_date","day","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+                       "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
+    df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 elif choice in ["Daily ES","Weekly ES","30m ES","2h ES","4h ES"]:
-    keep = ["time","open","high","low","close","200MA","50MA","20MA","10MA","5MA","Volume","ATR"]
-    df = df[[c for c in keep if c in df.columns]]
+    keep_fixed = ["time","open","high","low","close","200MA","50MA","20MA","10MA","5MA","Volume","ATR"]
+    df = df[[c for c in keep_fixed if c in df.columns]]
 
 elif choice == "Range Extensions":
-    keep = [
+    keep_fixed = [
         "date","day","range","14_Day_Avg_Range","range_gt_avg","range_gt_80_avg",
         "op_lo","op_lo_14_avg","op_lo_gt_avg","range_gt_80_op_lo",
         "hi_op","hi_op_14_avg","hi_op_gt_avg","range_gt_80_hi_op",
         "hit_both_80","hit_both_14_avg",
         "range_gt_120_avg","range_gt_120_op_lo","range_gt_120_hi_op"
     ]
-    df = df[[c for c in keep if c in df.columns]]
+    df = df[[c for c in keep_fixed if c in df.columns]]
 
-# ES Trade Day Summary — no hard restriction so you can see all fields;
-# we just optionally move trade_date/day to the front if present.  # NEW
-elif choice == "ES Trade Day Summary":
-    front = [c for c in ["trade_date","day"] if c in df.columns]
-    others = [c for c in df.columns if c not in front]
-    df = df[front + others]
+# (For full summary views, we don't force a fixed subset here.)
+
+# NEW: Generic view-level subset (from YAML dict views)
+if keep_cols:
+    df = df[[c for c in keep_cols if c in df.columns]]
 
 # ---- Format all numeric columns ----
 for col in df.columns:
@@ -159,8 +156,6 @@ THICK_BORDER_AFTER = {
     "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    # optional borders for summary if you want:
-    # "ES Trade Day Summary": ["trade_date"],
 }
 
 HEADER_LABELS = {
@@ -209,10 +204,9 @@ HEADER_LABELS = {
         "hit_r2": "R2", "hit_s2": "S2",
         "hit_r3": "R3", "hit_s3": "S3",
     },
-    # (Optional) Add custom header renames for summary later if you want.
 }
 
-# Detect boolean-like columns anywhere in the dataframe (NEW)
+# Detect boolean-like columns anywhere in the dataframe
 def detect_bool_like_columns(df: pd.DataFrame):
     bool_cols = []
     for c in df.columns:
@@ -220,13 +214,12 @@ def detect_bool_like_columns(df: pd.DataFrame):
         if s.dtype == bool:
             bool_cols.append(c)
         else:
-            # treat columns as boolean-like if (non-null) values are only True/False strings
             nonnull = s.dropna().astype(str).str.lower().unique()
             if len(nonnull) > 0 and set(nonnull).issubset({"true", "false"}):
                 bool_cols.append(c)
     return bool_cols
 
-# NOTE: Avoid Styler type hints that touch pandas.io.formats.* to prevent env-specific AttributeError.
+# Build the styled table
 def make_excelish_styler(df: pd.DataFrame, choice: str):
     styler = df.style.hide(axis="index")
     table_styles = [
@@ -245,10 +238,9 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
 
     styler = styler.set_table_styles(table_styles)
 
-    # UPDATED — Highlight ALL boolean-like cols, plus legacy hit/gt cols
+    # Highlight ALL boolean-like cols, plus legacy hit/gt cols
     bool_cols = detect_bool_like_columns(df)
     hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit", "gt", ">"])]
-
     highlight_cols = sorted(set(bool_cols + hit_cols))
     if highlight_cols:
         styler = styler.map(color_hits, subset=highlight_cols)
@@ -259,8 +251,9 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
 styled = make_excelish_styler(df, choice)
 html_table = styled.to_html()
 
-# ---- Swap header text (display-only) for all Pivots tables ----
-labels = HEADER_LABELS.get(choice, {})
+# NEW: Merge global header labels with per-view labels
+labels = HEADER_LABELS.get(choice, {}).copy()
+labels.update(header_labels)
 for orig, new in labels.items():
     html_table = html_table.replace(f">{orig}<", f">{new}<")
 
