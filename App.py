@@ -14,7 +14,7 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # CHANGED: pull base tables + YAML-defined views
-TABLES = build_tables()
+TABLES = build_tables(sb)
 
 st.title("Trading Dashboard")
 
