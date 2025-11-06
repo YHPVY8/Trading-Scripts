@@ -36,6 +36,7 @@ def list_base_tables():
         ("es_range_extensions", "Range Extensions"),
         ("es_trade_day_summary", "ES Trade Day Summary"),
         ("es_rth_pivot_levels", "RTH Pivots"),
+        ("es_on_pivot_levels",  "ON Pivots"),
     ]
 
 def get_columns_for_table(table_name: str):
