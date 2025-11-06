@@ -12,6 +12,13 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.title("Views Manager")
 
+# --- Rerun helper (works across Streamlit versions) ---
+def _safe_rerun():
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+
 # --- Helpers ---
 def list_base_tables():
     # Keep in sync with BASE_TABLES in views_config.py
@@ -116,7 +123,7 @@ if views:
                     }
                     if save_view(payload, existing_id=r["id"]):
                         st.success("Saved")
-                        st.experimental_rerun()
+                        _safe_rerun()
             with col_b:
                 if st.button("Duplicate", key=f"dup{r['id']}"):
                     payload = {
@@ -130,12 +137,12 @@ if views:
                     }
                     if save_view(payload, existing_id=None):
                         st.success("Duplicated")
-                        st.experimental_rerun()
+                        _safe_rerun()
             with col_c:
                 if st.button("Delete", key=f"del{r['id']}"):
                     if delete_view(r["id"]):
                         st.success("Deleted")
-                        st.experimental_rerun()
+                        _safe_rerun()
 else:
     st.info("No views yet. Create one below.")
 
@@ -179,4 +186,4 @@ if st.button("Save new view"):
     }
     if save_view(payload, existing_id=None):
         st.success("Created")
-        st.experimental_rerun()
+        _safe_rerun()
