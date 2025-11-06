@@ -35,6 +35,7 @@ BASE_TABLES = OrderedDict({
     "30m Pivots": ("es_30m_pivot_levels", "time"),
     "Range Extensions": ("es_range_extensions", "date"),
     "RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
+    "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
 })
 
 # ---- YAML loader (optional) ----
