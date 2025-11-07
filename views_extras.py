@@ -11,8 +11,8 @@ LEVEL_ALIASES = [
     ("S1.5",  ["S15", "s15"]),
     ("R2",    ["R2",  "r2"]),
     ("S2",    ["S2",  "s2"]),
-    ("R3", ["R3","r3"]),
-    ("S3", ["S3","s3"]),
+    # ("R3", ["R3","r3"]),
+    # ("S3", ["S3","s3"]),
 ]
 
 PIVOT_TABLES = {
@@ -122,32 +122,4 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
             except Exception:
                 lines.append(f"**{label}**  {v}")
     if lines:
-        st.markdown("#### Current period levels")
-
-        # Which labels get thick bottom borders?
-        thick_after = {"Pivot", "S0.5", "S1", "S1.5", "S2"}
-
-        html = ["<table style='border-collapse:collapse;'>"]
-
-        for ln in lines:
-            left, right = ln.split(":", 1)
-            level = left.strip()
-
-            # Decide border style
-            if level in thick_after:
-                border_css = "border-bottom: 3px solid #000; border-top:1px solid #ccc; border-left:1px solid #ccc; border-right:1px solid #ccc;"
-            else:
-                border_css = "border:1px solid #ccc;"
-
-            html.append(
-                f"""
-                <tr>
-                    <td style="{border_css} padding:4px 8px; font-weight:600">{left}</td>
-                    <td style="{border_css} padding:4px 8px;">{right}</td>
-                </tr>
-                """
-            )
-
-    html.append("</table>")
-    st.markdown("\n".join(html), unsafe_allow_html=True)
-
+        st.markdown("\n".join(f"- {ln}" for ln in lines))
