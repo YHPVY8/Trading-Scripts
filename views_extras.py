@@ -1,7 +1,6 @@
 # views_extras.py
 import streamlit as st
 
-# Map display label → possible underlying column names in DB
 LEVEL_ALIASES = [
     ("Pivot", ["Pivot", "pivot"]),
     ("R0.5",  ["R05", "r05"]),
@@ -12,12 +11,10 @@ LEVEL_ALIASES = [
     ("S1.5",  ["S15", "s15"]),
     ("R2",    ["R2",  "r2"]),
     ("S2",    ["S2",  "s2"]),
-    # Uncomment if you want:
-    # ("R3",    ["R3","r3"]),
-    # ("S3",    ["S3","s3"]),
+    # ("R3", ["R3","r3"]),
+    # ("S3", ["S3","s3"]),
 ]
 
-# We’ll detect “pivot tables” by the underlying table name, not by the UI label
 PIVOT_TABLES = {
     "es_daily_pivot_levels",
     "es_weekly_pivot_levels",
@@ -27,6 +24,11 @@ PIVOT_TABLES = {
     "es_rth_pivot_levels",
     "es_on_pivot_levels",
 }
+
+def _normalize_table_name(name: str) -> str:
+    # handle "public.es_rth_pivot_levels" → "es_rth_pivot_levels"
+    # and any casing/whitespace
+    return (name or "").strip().split(".")[-1].lower()
 
 def _first_present(rec, keys):
     for k in keys:
@@ -56,7 +58,6 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
         out = {}
         for label, cands in LEVEL_ALIASES:
             v = _first_present(rec, cands)
-            # try coercion to float for formatting
             if isinstance(v, str):
                 try:
                     v = float(v.replace(",", ""))
@@ -68,13 +69,17 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
         return {}
 
 def render_current_levels(sb, choice: str, table_name: str, date_col: str):
-    # Show levels for any of the known pivot-level tables (works even if UI label is a custom View name)
-    if (table_name not in PIVOT_TABLES) and (not table_name.endswith("_pivot_levels")):
+    norm = _normalize_table_name(table_name)
+
+    # Detect pivot tables by normalized name AND suffix
+    is_pivot = (norm in PIVOT_TABLES) or norm.endswith("_pivot_levels")
+    if not is_pivot:
+        # show a tiny diagnostic so you know why nothing prints
+        st.caption(f"ℹ️ Skipping levels (table '{table_name}' not recognized as a pivot-level table).")
         return
 
     levels = fetch_current_levels(sb, table_name, date_col)
 
-    # Debug caption if nothing found (you can remove this once confirmed)
     if not any(levels.values()):
         st.caption(f"ℹ️ No current levels found (table='{table_name}', date_col='{date_col}').")
         return
