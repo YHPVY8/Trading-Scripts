@@ -106,6 +106,16 @@ elif choice == "Range Extensions":
     ]
     df = df[[c for c in keep_fixed if c in df.columns]]
 
+elif choice in ["RTH Pivots", "ON Pivots"]:
+    # Mirror Daily Pivots but use trade_date instead of date
+    keep_cols_fixed = [
+        "trade_date", "day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"
+    ]
+    df = df[[c for c in keep_cols_fixed if c in df.columns]]
+
+
 # (For full summary views, we don't force a fixed subset here.)
 
 # NEW: Generic view-level subset (from YAML dict views)
