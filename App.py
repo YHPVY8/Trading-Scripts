@@ -77,7 +77,7 @@ if "time" in df.columns:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M")
 
 # --- Restrict columns for fixed datasets ---
-if choice == ["Daily Pivots","ON Pivots","RTH Pivots"]:
+if choice == "Daily Pivots":
     keep_cols_fixed = ["date","day","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
                        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
