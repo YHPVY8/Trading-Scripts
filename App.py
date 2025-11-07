@@ -325,8 +325,6 @@ st.markdown("""
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
 
-st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
-
 # NEW:
 render_current_levels(sb, choice, table_name, date_col)
 
