@@ -166,6 +166,9 @@ THICK_BORDER_AFTER = {
     "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    "RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+"ON Pivots":  ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+
 }
 
 HEADER_LABELS = {
@@ -214,6 +217,25 @@ HEADER_LABELS = {
         "hit_r2": "R2", "hit_s2": "S2",
         "hit_r3": "R3", "hit_s3": "S3",
     },
+    "RTH Pivots": {
+        "trade_date": "Date", "day": "Day",
+        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
+        "hit_r05": "R0.5", "hit_s05": "S0.5",
+        "hit_r1": "R1", "hit_s1": "S1",
+        "hit_r15": "R1.5", "hit_s15": "S1.5",
+        "hit_r2": "R2", "hit_s2": "S2",
+        "hit_r3": "R3", "hit_s3": "S3",
+},
+    "ON Pivots": {
+        "trade_date": "Date", "day": "Day",
+        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
+        "hit_r05": "R0.5", "hit_s05": "S0.5",
+        "hit_r1": "R1", "hit_s1": "S1",
+        "hit_r15": "R1.5", "hit_s15": "S1.5",
+        "hit_r2": "R2", "hit_s2": "S2",
+        "hit_r3": "R3", "hit_s3": "S3",
+},
+
 }
 
 # Detect boolean-like columns anywhere in the dataframe
