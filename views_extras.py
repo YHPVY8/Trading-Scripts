@@ -1,5 +1,5 @@
 # views_extras.py
-import pandas as pd
+import streamlit as st
 
 # Map display label → possible underlying column names in DB
 LEVEL_ALIASES = [
@@ -12,20 +12,27 @@ LEVEL_ALIASES = [
     ("S1.5",  ["S15", "s15"]),
     ("R2",    ["R2",  "r2"]),
     ("S2",    ["S2",  "s2"]),
-    # If you ever want R3/S3, just uncomment:
-    # ("R3",   ["R3","r3"]),
-    # ("S3",   ["S3","s3"]),
+    # Uncomment if you want:
+    # ("R3",    ["R3","r3"]),
+    # ("S3",    ["S3","s3"]),
 ]
 
-PIVOT_CHOICES = {"Daily Pivots", "RTH Pivots", "ON Pivots", "2h Pivots", "4h Pivots", "30m Pivots"}
-
+# We’ll detect “pivot tables” by the underlying table name, not by the UI label
+PIVOT_TABLES = {
+    "es_daily_pivot_levels",
+    "es_weekly_pivot_levels",
+    "es_2hr_pivot_levels",
+    "es_4hr_pivot_levels",
+    "es_30m_pivot_levels",
+    "es_rth_pivot_levels",
+    "es_on_pivot_levels",
+}
 
 def _first_present(rec, keys):
     for k in keys:
         if k in rec and rec[k] not in (None, ""):
             return rec[k]
     return None
-
 
 def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
     try:
@@ -34,11 +41,13 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
             needed.update(cands)
         select_str = ",".join(sorted(needed))
 
-        resp = (sb.table(table_name)
-                  .select(select_str)
-                  .order(date_col, desc=True)
-                  .limit(1)
-                  .execute())
+        resp = (
+            sb.table(table_name)
+              .select(select_str)
+              .order(date_col, desc=True)
+              .limit(1)
+              .execute()
+        )
         rows = resp.data or []
         if not rows:
             return {}
@@ -47,7 +56,7 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
         out = {}
         for label, cands in LEVEL_ALIASES:
             v = _first_present(rec, cands)
-            # try to coerce to float for formatting
+            # try coercion to float for formatting
             if isinstance(v, str):
                 try:
                     v = float(v.replace(",", ""))
@@ -58,15 +67,16 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
     except Exception:
         return {}
 
-
 def render_current_levels(sb, choice: str, table_name: str, date_col: str):
-    import streamlit as st
-
-    if choice not in PIVOT_CHOICES:
+    # Show levels for any of the known pivot-level tables (works even if UI label is a custom View name)
+    if (table_name not in PIVOT_TABLES) and (not table_name.endswith("_pivot_levels")):
         return
 
     levels = fetch_current_levels(sb, table_name, date_col)
+
+    # Debug caption if nothing found (you can remove this once confirmed)
     if not any(levels.values()):
+        st.caption(f"ℹ️ No current levels found (table='{table_name}', date_col='{date_col}').")
         return
 
     st.markdown("#### Current period levels")
@@ -78,6 +88,5 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
                 lines.append(f"**{label}**  {v:,.2f}")
             except Exception:
                 lines.append(f"**{label}**  {v}")
-
     if lines:
         st.markdown("\n".join(lines))
