@@ -3,8 +3,12 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 
-# NEW: import the tables/view builder
+#import the tables/view builder
 from views_config import build_tables
+
+#import the table with price levels below the pivot "hits"
+from views_extras import render_current_levels
+
 
 # ---- CONFIG ----
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
@@ -320,6 +324,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
+
+st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
+
+# NEW:
+render_current_levels(sb, choice, table_name, date_col)
+
 
 st.download_button(
     "💾 Download filtered CSV",
