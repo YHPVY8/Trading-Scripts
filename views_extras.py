@@ -26,8 +26,6 @@ PIVOT_TABLES = {
 }
 
 def _normalize_table_name(name: str) -> str:
-    # handle "public.es_rth_pivot_levels" → "es_rth_pivot_levels"
-    # and any casing/whitespace
     return (name or "").strip().split(".")[-1].lower()
 
 def _first_present(rec, keys):
@@ -36,16 +34,20 @@ def _first_present(rec, keys):
             return rec[k]
     return None
 
+def _first_existing_datecol(rec: dict, preferred: str):
+    # prefer the passed-in date_col; if missing, try common fallbacks
+    candidates = [preferred, "trade_date", "date", "time"]
+    for c in candidates:
+        if c in rec:
+            return c
+    return preferred  # last resort; request will still have 1 row
+
 def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
     try:
-        needed = {date_col}
-        for _, cands in LEVEL_ALIASES:
-            needed.update(cands)
-        select_str = ",".join(sorted(needed))
-
+        # Get latest row with all columns to avoid case/quote issues
         resp = (
             sb.table(table_name)
-              .select(select_str)
+              .select("*")
               .order(date_col, desc=True)
               .limit(1)
               .execute()
@@ -54,6 +56,22 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
         if not rows:
             return {}
         rec = rows[0]
+
+        # If the chosen date_col wasn't actually present, try again ordering by a fallback
+        if date_col not in rec:
+            # try a second query using a fallback date field that exists in the row
+            fallback = _first_existing_datecol(rec, date_col)
+            if fallback != date_col:
+                resp2 = (
+                    sb.table(table_name)
+                      .select("*")
+                      .order(fallback, desc=True)
+                      .limit(1)
+                      .execute()
+                )
+                rows2 = resp2.data or []
+                if rows2:
+                    rec = rows2[0]
 
         out = {}
         for label, cands in LEVEL_ALIASES:
@@ -70,18 +88,28 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
 
 def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     norm = _normalize_table_name(table_name)
-
-    # Detect pivot tables by normalized name AND suffix
     is_pivot = (norm in PIVOT_TABLES) or norm.endswith("_pivot_levels")
     if not is_pivot:
-        # show a tiny diagnostic so you know why nothing prints
+        # Small diagnostic so you know why nothing prints
         st.caption(f"ℹ️ Skipping levels (table '{table_name}' not recognized as a pivot-level table).")
         return
 
     levels = fetch_current_levels(sb, table_name, date_col)
 
     if not any(levels.values()):
-        st.caption(f"ℹ️ No current levels found (table='{table_name}', date_col='{date_col}').")
+        # Show what keys were present in the latest record to help diagnose column-name mismatches
+        try:
+            probe = (
+                sb.table(table_name)
+                  .select("*")
+                  .order(date_col, desc=True)
+                  .limit(1)
+                  .execute()
+            )
+            keys = ", ".join(sorted((probe.data or [{}])[0].keys()))
+        except Exception:
+            keys = "unknown"
+        st.caption(f"ℹ️ No current levels found (table='{table_name}', date_col='{date_col}'). Latest row keys: {keys}")
         return
 
     st.markdown("#### Current period levels")
