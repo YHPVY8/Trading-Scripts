@@ -122,4 +122,4 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
             except Exception:
                 lines.append(f"**{label}**  {v}")
     if lines:
-        st.markdown("<br>".join(lines), unsafe_allow_html=True)
+        st.markdown("\n".join(f"- {ln}" for ln in lines))
