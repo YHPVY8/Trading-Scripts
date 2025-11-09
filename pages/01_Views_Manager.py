@@ -3,7 +3,6 @@ import json
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-#from views_extras import render_spx_or_extras
 
 st.set_page_config(page_title="Views Manager", layout="wide")
 
@@ -88,7 +87,6 @@ def delete_view(view_id):
         st.error(f"Delete failed: {e}")
         return False
 
-#render_spx_or_extras(choice, table_name, df)
 
 # --- UI: Existing views list ---
 st.subheader("Existing Views")
