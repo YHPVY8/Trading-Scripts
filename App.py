@@ -67,6 +67,14 @@ if date_col in df.columns:
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.sort_values(date_col).reset_index(drop=True)
 
+# --- SPX Opening Range: filter to a single OR window + show metrics (keep generic styling)
+if choice == "SPX Opening Range":
+    from views_extras import spx_opening_range_filter_and_metrics
+    df = spx_opening_range_filter_and_metrics(df)
+    if df.empty:
+        st.info("No rows after applying the SPX window filter.")
+        st.stop()
+
 # --- CLEANUP PER DATASET ---
 if choice == "Daily ES" and "id" in df.columns:
     df = df.drop(columns=["id"])
