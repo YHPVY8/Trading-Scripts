@@ -3,6 +3,7 @@ import json
 import streamlit as st
 import pandas as pd
 from supabase import create_client
+from views_extras import render_spx_or_extras
 
 st.set_page_config(page_title="Views Manager", layout="wide")
 
@@ -37,7 +38,6 @@ def list_base_tables():
         ("es_trade_day_summary", "ES Trade Day Summary"),
         ("es_rth_pivot_levels", "RTH Pivots"),
         ("es_on_pivot_levels",  "ON Pivots"),
-        ("es_opening_range_stats", "Opening Range Stats"),
         ("spx_opening_range_stats", "SPX Opening Range"),
 
     ]
@@ -87,6 +87,8 @@ def delete_view(view_id):
     except Exception as e:
         st.error(f"Delete failed: {e}")
         return False
+
+render_spx_or_extras(choice, table_name, df)
 
 # --- UI: Existing views list ---
 st.subheader("Existing Views")
