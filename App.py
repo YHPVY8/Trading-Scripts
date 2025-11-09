@@ -239,6 +239,18 @@ HEADER_LABELS = {
         "hit_r2": "R2", "hit_s2": "S2",
         "hit_r3": "R3", "hit_s3": "S3",
 },
+    "SPX Opening Range": {
+    "trade_date": "Date",
+    "symbol": "Symbol",
+    "or_window": "OR Window",
+    "orh": "OR High",
+    "orl": "OR Low",
+    "or_range": "OR Range",
+    "first_break": "First Break",
+    "broke_up": "Broke Up",
+    "broke_down": "Broke Down",
+    "broke_both": "Broke Both",
+},
 
 }
 
