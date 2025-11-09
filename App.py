@@ -135,8 +135,19 @@ elif choice in ["RTH Pivots", "ON Pivots"]:
 # (For full summary views, we don't force a fixed subset here.)
 
 # NEW: Generic view-level subset (from YAML dict views)
+# NEW: Generic view-level subset (from YAML dict views)
 if keep_cols:
+    # Ensure SPX extension columns are kept even if the view omitted them
+    if choice == "SPX Opening Range":
+        required_spx = [
+            "hit_20_up","hit_50_up","hit_100_up",
+            "hit_20_down","hit_50_down","hit_100_down",
+            "max_ext_up","max_ext_down",
+        ]
+        # preserve original order while appending any missing required fields
+        keep_cols = list(dict.fromkeys(list(keep_cols) + required_spx))
     df = df[[c for c in keep_cols if c in df.columns]]
+
 
 # ---- Format all numeric columns ----
 for col in df.columns:
