@@ -38,6 +38,8 @@ def list_base_tables():
         ("es_rth_pivot_levels", "RTH Pivots"),
         ("es_on_pivot_levels",  "ON Pivots"),
         ("es_opening_range_stats", "Opening Range Stats"),
+        ("spx_opening_range_stats", "SPX Opening Range"),
+
     ]
 
 def get_columns_for_table(table_name: str):
