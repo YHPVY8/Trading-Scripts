@@ -103,12 +103,14 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     norm = _normalize_table_name(table_name)
     is_pivot = (norm in PIVOT_TABLES) or norm.endswith("_pivot_levels")
     if not is_pivot:
+        # Small diagnostic so you know why nothing prints
         st.caption(f"ℹ️ Skipping levels (table '{table_name}' not recognized as a pivot-level table).")
         return
 
     levels = fetch_current_levels(sb, table_name, date_col)
 
     if not any(levels.values()):
+        # Show what keys were present in the latest record to help diagnose column-name mismatches
         try:
             probe = (
                 sb.table(table_name)
@@ -166,8 +168,11 @@ def _rate_from_numeric(df: pd.DataFrame, colname: str, threshold: float) -> str:
 
 def render_view_override(view_id: str) -> bool:
     """
-    If the current view is 'SPX Opening Range', render it here and return True
-    to prevent the default generic table renderer from running.
+    Custom renderer for SPX Opening Range that preserves:
+      - ascending date order (latest at bottom),
+      - True/False green highlighting,
+      - 2-decimal formatting on OR columns,
+      - extension metrics with clear fallbacks/diagnostics.
     """
     if view_id != "SPX Opening Range":
         return False
@@ -183,7 +188,7 @@ def render_view_override(view_id: str) -> bool:
         win = st.selectbox("OR Window", ["3m", "5m", "15m"], index=0)
         st.caption("Shows one row per day by filtering to the selected window.")
 
-    # ---- Query Supabase: filter to the selected window
+    # ---- Query Supabase: filter to the selected window (no ORDER here; we sort ASC client-side)
     sb = _sb()
     q = (
         sb.table("spx_opening_range_stats")
@@ -192,13 +197,22 @@ def render_view_override(view_id: str) -> bool:
           .lte("trade_date", str(d2))
           .eq("symbol", "SPX")
           .eq("or_window", win)
-          .order("trade_date", desc=True)
     )
     data = (q.execute().data) or []
     df = pd.DataFrame(data)
     if df.empty:
         st.info("No rows match the current filters.")
         return True
+
+    # ---- Normalize/format & sort ASC (latest at bottom)
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+        df = df.sort_values("trade_date", ascending=True).reset_index(drop=True)
+
+    # Numeric formatting (2 decimals for OR columns)
+    for c in ["orh", "orl", "or_range"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
 
     # ---- Top metrics: broke up/down/both
     c1, c2, c3, c4 = st.columns(4)
@@ -231,23 +245,88 @@ def render_view_override(view_id: str) -> bool:
                    "`hit_up20`, `hit_up50`, `hit_up100`, `hit_dn20`, `hit_dn50`, `hit_dn100` "
                    "or numeric `max_up_ext` / `max_dn_ext` (fractions of OR).")
 
-    # ---- Display the filtered table with friendly headers
+    # ---- Display the filtered table with friendly headers + boolean highlighting
     rename = {
-        "trade_date":"Date","symbol":"Symbol","or_window":"OR Window",
-        "orh":"OR High","orl":"OR Low","or_range":"OR Range",
+        "trade_date":"Date","symbol":"Symbol","or_window":"OR Time",
+        "orh":"ORH","orl":"ORL","or_range":"OR Range",
         "first_break":"First Break","broke_up":"Broke Up",
         "broke_down":"Broke Down","broke_both":"Broke Both",
     }
     table = df.rename(columns={k:v for k,v in rename.items() if k in df.columns}).copy()
-    for c in ["OR High","OR Low","OR Range"]:
-        if c in table:
+
+    # Limit display columns to a clean set (optional)
+    show_cols = [c for c in ["Date","Symbol","OR Time","ORH","ORL","OR Range","First Break","Broke Up","Broke Down","Broke Both"] if c in table.columns]
+    if show_cols:
+        table = table[show_cols]
+
+    # Re-round for display safety
+    for c in ["ORH","ORL","OR Range"]:
+        if c in table.columns:
             table[c] = pd.to_numeric(table[c], errors="coerce").round(2)
-    if "Date" in table:
-        table["Date"] = pd.to_datetime(table["Date"]).dt.date
 
-    st.dataframe(table, use_container_width=True, hide_index=True)
+    # === Match your green highlighting ===
+    def _color_hits(val):
+        if val is True or str(val).lower() == "true":
+            return "background-color: #98FB98"
+        return ""
 
-    # ---- Download
+    def _detect_bool_like_columns(dfx: pd.DataFrame):
+        bool_cols = []
+        for c in dfx.columns:
+            s = dfx[c]
+            if s.dtype == bool:
+                bool_cols.append(c)
+            else:
+                nonnull = s.dropna().astype(str).str.lower().unique()
+                if len(nonnull) > 0 and set(nonnull).issubset({"true", "false"}):
+                    bool_cols.append(c)
+        return bool_cols
+
+    styler = table.style.hide(axis="index")
+    table_styles = [
+        {"selector": "table", "props": [("border-collapse", "collapse")]},
+        {"selector": "th, td", "props": [("border", "1px solid #E5E7EB"), ("padding", "6px 8px")]},
+        {"selector": "thead th", "props": [("font-weight", "700"), ("color", "#000")]}
+    ]
+    styler = styler.set_table_styles(table_styles)
+
+    bool_like = _detect_bool_like_columns(table)
+    if bool_like:
+        styler = styler.map(_color_hits, subset=bool_like)
+
+    # Render with same sticky header/scroll container pattern you use in app.py
+    html_table = styler.to_html()
+    st.markdown("""
+        <style>
+        .scroll-table-container {
+            max-height: 600px;
+            overflow-y: auto;
+            border: 1px solid #E5E7EB;
+        }
+        .scroll-table-container table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .scroll-table-container thead th {
+            position: sticky;
+            top: 0;
+            z-index: 3;
+            background-color: #d0d0d0 !important;
+            color: #000;
+            font-weight: 700;
+            background-image: linear-gradient(to bottom,
+                rgba(0,0,0,0) calc(100% - 3px),
+                #000 calc(100% - 3px),
+                #000 100%
+            ) !important;
+            background-clip: padding-box;
+            border-bottom: none !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
+
+    # ---- Download (raw df so you keep all columns)
     st.download_button(
         "Download CSV",
         df.to_csv(index=False),
