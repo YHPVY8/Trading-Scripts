@@ -6,14 +6,12 @@ from supabase import create_client
 #import the tables/view builder
 from views_config import build_tables
 
-#import the table with price levels below the pivot "hits"
+# import the table with price levels below the pivot "hits"
 from views_extras import render_current_levels
 
-# NEW: import the SPX view override
-try:
-    from views_extras import render_view_override
-except Exception:
-    render_view_override = None
+# NEW: SPX helper (filters DF + shows metrics; keeps generic styling)
+from views_extras import spx_opening_range_filter_and_metrics
+
 
 
 # ---- CONFIG ----
@@ -31,13 +29,6 @@ st.title("Trading Dashboard")
 # ---- Sidebar ----
 choice = st.sidebar.selectbox("Select data set", list(TABLES.keys()))
 limit = st.sidebar.number_input("Number of rows to load", value=1000, min_value=100, step=100)
-
-# --- SPX Opening Range: custom view override ---
-if render_view_override is not None:
-    handled = render_view_override(choice)   # will render the SPX page & return True
-    if handled:
-        st.stop()  # prevent the generic loader/renderer from running
-
 
 # NEW: normalize the selected config (tuple OR dict)
 cfg = TABLES[choice]
