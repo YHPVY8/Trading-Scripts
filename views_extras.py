@@ -1,5 +1,6 @@
 # views_extras.py
 import streamlit as st
+import pandas as pd
 
 LEVEL_ALIASES = [
     ("Pivot", ["Pivot", "pivot"]),
@@ -24,6 +25,16 @@ PIVOT_TABLES = {
     "es_rth_pivot_levels",
     "es_on_pivot_levels",
 }
+
+def render_spx_or_extras(choice: str, table_name: str, df: pd.DataFrame | None):
+    """Lightweight metrics for SPX Opening Range view."""
+    if choice != "SPX Opening Range" or df is None or df.empty:
+        return
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Rows", f"{len(df):,}")
+    if "broke_up" in df:   c2.metric("Broke Up",   f"{100*df['broke_up'].mean():.1f}%")
+    if "broke_down" in df: c3.metric("Broke Down", f"{100*df['broke_down'].mean():.1f}%")
+    if "broke_both" in df: c4.metric("Broke Both", f"{100*df['broke_both'].mean():.1f}%")
 
 def _normalize_table_name(name: str) -> str:
     return (name or "").strip().split(".")[-1].lower()
