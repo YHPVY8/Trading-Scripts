@@ -15,8 +15,8 @@ LEVEL_ALIASES = [
     ("S1.5",  ["S15", "s15"]),
     ("R2",    ["R2",  "r2"]),
     ("S2",    ["S2",  "s2"]),
-    ("R3", ["R3","r3"]),
-    ("S3", ["S3","s3"]),
+    ("R3",    ["R3","r3"]),
+    ("S3",    ["S3","s3"]),
 ]
 
 PIVOT_TABLES = {
@@ -166,56 +166,59 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     # --- Top metrics
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.metric("Rows", f"{len(dff):,}")
-    with c2: st.metric("Broke Up",   f"{100.0 * pd.to_numeric(dff.get('broke_up', pd.Series(dtype=bool)), errors='coerce').mean():.1f}%" if "broke_up"   in dff else "–")
+    with c2: st.metric("Broke Up",   f"{100.0 * pd.to_numeric(dff.get('broke_up',   pd.Series(dtype=bool)), errors='coerce').mean():.1f}%" if "broke_up"   in dff else "–")
     with c3: st.metric("Broke Down", f"{100.0 * pd.to_numeric(dff.get('broke_down', pd.Series(dtype=bool)), errors='coerce').mean():.1f}%" if "broke_down" in dff else "–")
     with c4: st.metric("Broke Both", f"{100.0 * pd.to_numeric(dff.get('broke_both', pd.Series(dtype=bool)), errors='coerce').mean():.1f}%" if "broke_both" in dff else "–")
 
-    # --- Extension metrics (≥20/50/100%)
-    def _first_existing(dfX, cands):
-        for c in cands:
-            if c in dfX.columns:
-                return c
+    # --- Extension metrics (≥20/50/100%) — robust, case-insensitive lookup
+    cols_lower = {c.lower(): c for c in dff.columns}  # map lower->actual
+
+    def _find_col_ci(names):
+        for n in names:
+            if n.lower() in cols_lower:
+                return cols_lower[n.lower()]
         return None
 
+    # Your schema first, then fallbacks
+    up20  = _find_col_ci(["hit_20_up",  "hitup20", "hit_up20", "up20",  "or_up_20",  "hit_or_up_20"])
+    up50  = _find_col_ci(["hit_50_up",  "hitup50", "hit_up50", "up50",  "or_up_50",  "hit_or_up_50"])
+    up100 = _find_col_ci(["hit_100_up", "hitup100","hit_up100","up100", "or_up_100", "hit_or_up_100"])
+
+    dn20  = _find_col_ci(["hit_20_down",  "hitdn20", "hit_down20", "down20",  "or_dn_20",  "hit_or_dn_20"])
+    dn50  = _find_col_ci(["hit_50_down",  "hitdn50", "hit_down50", "down50",  "or_dn_50",  "hit_or_dn_50"])
+    dn100 = _find_col_ci(["hit_100_down", "hitdn100","hit_down100","down100", "or_dn_100", "hit_or_dn_100"])
+
+    # numeric fallbacks (fractions of OR)
+    max_up = _find_col_ci(["max_ext_up", "max_up_ext", "max_up_frac", "max_up_or_mult"])
+    max_dn = _find_col_ci(["max_ext_down", "max_dn_ext", "max_dn_frac", "max_dn_or_mult"])
+
+    # --- Metrics render
+    st.markdown("#### Extension hits (fraction of OR after the window completes)")
+    e1, e2, e3, e4, e5, e6 = st.columns(6)
     def _rate_from_bool(dfX, col):
         if not col or col not in dfX: return "–"
         s = dfX[col]
-        if s.dtype != bool:
-            s = s.astype(str).str.lower().isin(["true","1","yes"])
-        return f"{100.0 * s.mean():.1f}%"
+        # coerce any "True"/"False"/1/0 strings -> booleans
+        s = s.map(lambda v: True if str(v).strip().lower() in {"true","1","yes"} else (False if str(v).strip().lower() in {"false","0","no"} else None))
+        s = s.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     def _rate_from_numeric(dfX, col, thr):
         if not col or col not in dfX: return "–"
         s = pd.to_numeric(dfX[col], errors="coerce")
-        return f"{100.0 * (s >= thr).mean():.1f}%"
+        s = s.dropna()
+        return "–" if s.empty else f"{100.0 * (s >= thr).mean():.1f}%"
 
-    # --- Extension metrics (≥20/50/100%) — use your actual column names first
-    up20 = _first_existing(dff, ["hit_20_up", "hit_up20", "up20", "or_up_20", "hit_or_up_20"])
-    up50 = _first_existing(dff, ["hit_50_up", "hit_up50", "up50", "or_up_50", "hit_or_up_50"])
-    up100 = _first_existing(dff, ["hit_100_up", "hit_up100", "up100", "or_up_100", "hit_or_up_100"])
+    with e1: st.metric("Up ≥20%",   _rate_from_bool(dff, up20)  if up20  else _rate_from_numeric(dff, max_up, 0.20))
+    with e2: st.metric("Up ≥50%",   _rate_from_bool(dff, up50)  if up50  else _rate_from_numeric(dff, max_up, 0.50))
+    with e3: st.metric("Up ≥100%",  _rate_from_bool(dff, up100) if up100 else _rate_from_numeric(dff, max_up, 1.00))
+    with e4: st.metric("Down ≥20%", _rate_from_bool(dff, dn20)  if dn20  else _rate_from_numeric(dff, max_dn, 0.20))
+    with e5: st.metric("Down ≥50%", _rate_from_bool(dff, dn50)  if dn50  else _rate_from_numeric(dff, max_dn, 0.50))
+    with e6: st.metric("Down ≥100%",_rate_from_bool(dff, dn100) if dn100 else _rate_from_numeric(dff, max_dn, 1.00))
 
-    dn20 = _first_existing(dff, ["hit_20_down", "hit_dn20", "down20", "or_dn_20", "hit_or_dn_20"])
-    dn50 = _first_existing(dff, ["hit_50_down", "hit_dn50", "down50", "or_dn_50", "hit_or_dn_50"])
-    dn100 = _first_existing(dff, ["hit_100_down", "hit_dn100", "down100", "or_dn_100", "hit_or_dn_100"])
-
-    # Your numeric columns:
-    max_up = _first_existing(dff, ["max_ext_up", "max_up_ext", "max_up_frac", "max_up_or_mult"])
-    max_dn = _first_existing(dff, ["max_ext_down", "max_dn_ext", "max_dn_frac", "max_dn_or_mult"])
-
-
-    st.markdown("#### Extension hits (fraction of OR after the window completes)")
-    e1, e2, e3, e4, e5, e6 = st.columns(6)
-    with e1: st.metric("Up ≥20%",  _rate_from_bool(dff, up20)  if up20  else _rate_from_numeric(dff, max_up, 0.20))
-    with e2: st.metric("Up ≥50%",  _rate_from_bool(dff, up50)  if up50  else _rate_from_numeric(dff, max_up, 0.50))
-    with e3: st.metric("Up ≥100%", _rate_from_bool(dff, up100) if up100 else _rate_from_numeric(dff, max_up, 1.00))
-    with e4: st.metric("Down ≥20%",  _rate_from_bool(dff, dn20)  if dn20  else _rate_from_numeric(dff, max_dn, 0.20))
-    with e5: st.metric("Down ≥50%",  _rate_from_bool(dff, dn50)  if dn50  else _rate_from_numeric(dff, max_dn, 0.50))
-    with e6: st.metric("Down ≥100%", _rate_from_bool(dff, dn100) if dn100 else _rate_from_numeric(dff, max_dn, 1.00))
-
+    # TEMP debug to verify columns present (remove after it works)
     if not any([up20, up50, up100, dn20, dn50, dn100, max_up, max_dn]):
-        st.caption("ℹ️ No extension columns detected. Add boolean hits "
-                   "`hit_up20/50/100`, `hit_dn20/50/100` or numeric `max_up_ext`/`max_dn_ext` "
-                   "(fractions of OR).")
+        st.caption(f"🧪 Debug: columns available → {', '.join(dff.columns)}")
 
     # Return filtered DF so App.py keeps your standard styling
     return dff
