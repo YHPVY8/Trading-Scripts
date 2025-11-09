@@ -35,9 +35,9 @@ def render_spx_or_extras(choice: str, table_name: str, df: pd.DataFrame | None):
         return
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Rows", f"{len(df):,}")
-    if "broke_up" in df:   c2.metric("Broke Up",   f"{100*df['broke_up'].mean():.1f}%")
-    if "broke_down" in df: c3.metric("Broke Down", f"{100*df['broke_down'].mean():.1f}%")
-    if "broke_both" in df: c4.metric("Broke Both", f"{100*df['broke_both'].mean():.1f}%")
+    if "broke_up" in df:   c2.metric("Broke Up",   f"{100*pd.to_numeric(df['broke_up'], errors='coerce').mean():.1f}%")
+    if "broke_down" in df: c3.metric("Broke Down", f"{100*pd.to_numeric(df['broke_down'], errors='coerce').mean():.1f}%")
+    if "broke_both" in df: c4.metric("Broke Both", f"{100*pd.to_numeric(df['broke_both'], errors='coerce').mean():.1f}%")
 
 def _normalize_table_name(name: str) -> str:
     return (name or "").strip().split(".")[-1].lower()
@@ -137,201 +137,89 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     if lines:
         st.markdown("\n".join(f"- {ln}" for ln in lines))
 
-# -------------------- New helpers & override --------------------
+# -------------------- New helpers (SPX filter + metrics) --------------------
 
 def _sb():
     """Local Supabase client using Streamlit secrets."""
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-def _first_existing(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-def _pct(series: pd.Series) -> str:
-    if series is None or series.empty:
-        return "–"
-    try:
-        return f"{100.0 * series.mean():.1f}%"
-    except Exception:
-        return "–"
-
-def _rate_from_bool(df: pd.DataFrame, colname: str) -> str:
-    return _pct(df[colname]) if colname and colname in df else "–"
-
-def _rate_from_numeric(df: pd.DataFrame, colname: str, threshold: float) -> str:
-    if colname and colname in df:
-        s = pd.to_numeric(df[colname], errors="coerce")
-        return f"{100.0 * (s >= threshold).mean():.1f}%"
-    return "–"
-
-def render_view_override(view_id: str) -> bool:
+def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Custom renderer for SPX Opening Range that preserves:
-      - ascending date order (latest at bottom),
-      - True/False green highlighting,
-      - 2-decimal formatting on OR columns,
-      - extension metrics with clear fallbacks/diagnostics.
+    Sidebar control + metrics for SPX Opening Range that returns a filtered DF.
+    We DO NOT render a custom table here—App.py's generic renderer will handle
+    styling, sorting, green highlights, downloads, etc.
     """
-    if view_id != "SPX Opening Range":
-        return False
+    if df is None or df.empty:
+        return df
+    if "or_window" not in df.columns:
+        return df
 
-    st.title("SPX Opening Range — single window")
+    # --- Sidebar: choose a single window (3m/5m/15m)
+    win = st.sidebar.selectbox("OR Window (SPX)", ["3m", "5m", "15m"], index=0, key="spx_or_window")
+    dff = df[df["or_window"] == win].copy()
 
-    # ---- Sidebar: pick a single window and date range
-    with st.sidebar:
-        st.subheader("Filters")
-        default_end = date.today()
-        default_start = default_end - timedelta(days=120)
-        d1, d2 = st.date_input("Date range", value=(default_start, default_end), format="YYYY-MM-DD")
-        win = st.selectbox("OR Window", ["3m", "5m", "15m"], index=0)
-        st.caption("Shows one row per day by filtering to the selected window.")
+    # Ensure date ordering ASC so latest is at the bottom (matches App.py)
+    if "trade_date" in dff.columns:
+        dff["trade_date"] = pd.to_datetime(dff["trade_date"], errors="coerce")
+        dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
-    # ---- Query Supabase: filter to the selected window (no ORDER here; we sort ASC client-side)
-    sb = _sb()
-    q = (
-        sb.table("spx_opening_range_stats")
-          .select("*")
-          .gte("trade_date", str(d1))
-          .lte("trade_date", str(d2))
-          .eq("symbol", "SPX")
-          .eq("or_window", win)
-    )
-    data = (q.execute().data) or []
-    df = pd.DataFrame(data)
-    if df.empty:
-        st.info("No rows match the current filters.")
-        return True
-
-    # ---- Normalize/format & sort ASC (latest at bottom)
-    if "trade_date" in df.columns:
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
-        df = df.sort_values("trade_date", ascending=True).reset_index(drop=True)
-
-    # Numeric formatting (2 decimals for OR columns)
-    for c in ["orh", "orl", "or_range"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce").round(2)
-
-    # ---- Top metrics: broke up/down/both
+    # --- Top metrics
     c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("Rows", f"{len(df):,}")
-    with c2: st.metric("Broke Up",   _pct(df["broke_up"])   if "broke_up"   in df else "–")
-    with c3: st.metric("Broke Down", _pct(df["broke_down"]) if "broke_down" in df else "–")
-    with c4: st.metric("Broke Both", _pct(df["broke_both"]) if "broke_both" in df else "–")
+    with c1: st.metric("Rows", f"{len(dff):,}")
+    with c2: st.metric("Broke Up",   f"{100.0 * pd.to_numeric(dff.get('broke_up', pd.Series(dtype=bool)), errors='coerce').mean():.1f}%" if "broke_up"   in dff else "–")
+    with c3: st.metric("Broke Down", f"{100.0 * pd.to_numeric(dff.get('broke_down', pd.Series(dtype=bool)), errors='coerce').mean():.1f}%" if "broke_down" in dff else "–")
+    with c4: st.metric("Broke Both", f"{100.0 * pd.to_numeric(dff.get('broke_both', pd.Series(dtype=bool)), errors='coerce').mean():.1f}%" if "broke_both" in dff else "–")
 
-    # ---- Extension metrics (≥20/50/100%) — supports either boolean hit cols or numeric max-ext cols
-    up20_col = _first_existing(df, ["hit_up20","up20","or_up_20","hit_or_up_20"])
-    up50_col = _first_existing(df, ["hit_up50","up50","or_up_50","hit_or_up_50"])
-    up100_col= _first_existing(df, ["hit_up100","up100","or_up_100","hit_or_up_100"])
-    dn20_col = _first_existing(df, ["hit_dn20","down20","or_dn_20","hit_or_dn_20"])
-    dn50_col = _first_existing(df, ["hit_dn50","down50","or_dn_50","hit_or_dn_50"])
-    dn100_col= _first_existing(df, ["hit_dn100","down100","or_dn_100","hit_or_dn_100"])
-    max_up_col = _first_existing(df, ["max_up_ext","max_up_frac","max_up_or_mult"])
-    max_dn_col = _first_existing(df, ["max_dn_ext","max_dn_frac","max_dn_or_mult"])
+    # --- Extension metrics (≥20/50/100%)
+    def _first_existing(dfX, cands):
+        for c in cands:
+            if c in dfX.columns:
+                return c
+        return None
+
+    def _rate_from_bool(dfX, col):
+        if not col or col not in dfX: return "–"
+        s = dfX[col]
+        if s.dtype != bool:
+            s = s.astype(str).str.lower().isin(["true","1","yes"])
+        return f"{100.0 * s.mean():.1f}%"
+
+    def _rate_from_numeric(dfX, col, thr):
+        if not col or col not in dfX: return "–"
+        s = pd.to_numeric(dfX[col], errors="coerce")
+        return f"{100.0 * (s >= thr).mean():.1f}%"
+
+    up20 = _first_existing(dff, ["hit_up20","up20","or_up_20","hit_or_up_20"])
+    up50 = _first_existing(dff, ["hit_up50","up50","or_up_50","hit_or_up_50"])
+    up100= _first_existing(dff, ["hit_up100","up100","or_up_100","hit_or_up_100"])
+    dn20 = _first_existing(dff, ["hit_dn20","down20","or_dn_20","hit_or_dn_20"])
+    dn50 = _first_existing(dff, ["hit_dn50","down50","or_dn_50","hit_or_dn_50"])
+    dn100= _first_existing(dff, ["hit_dn100","down100","or_dn_100","hit_or_dn_100"])
+    max_up = _first_existing(dff, ["max_up_ext","max_up_frac","max_up_or_mult"])
+    max_dn = _first_existing(dff, ["max_dn_ext","max_dn_frac","max_dn_or_mult"])
 
     st.markdown("#### Extension hits (fraction of OR after the window completes)")
     e1, e2, e3, e4, e5, e6 = st.columns(6)
-    with e1: st.metric("Up ≥20%",  _rate_from_bool(df, up20_col)  if up20_col  else _rate_from_numeric(df, max_up_col, 0.20))
-    with e2: st.metric("Up ≥50%",  _rate_from_bool(df, up50_col)  if up50_col  else _rate_from_numeric(df, max_up_col, 0.50))
-    with e3: st.metric("Up ≥100%", _rate_from_bool(df, up100_col) if up100_col else _rate_from_numeric(df, max_up_col, 1.00))
-    with e4: st.metric("Down ≥20%",  _rate_from_bool(df, dn20_col)  if dn20_col  else _rate_from_numeric(df, max_dn_col, 0.20))
-    with e5: st.metric("Down ≥50%",  _rate_from_bool(df, dn50_col)  if dn50_col  else _rate_from_numeric(df, max_dn_col, 0.50))
-    with e6: st.metric("Down ≥100%", _rate_from_bool(df, dn100_col) if dn100_col else _rate_from_numeric(df, max_dn_col, 1.00))
+    with e1: st.metric("Up ≥20%",  _rate_from_bool(dff, up20)  if up20  else _rate_from_numeric(dff, max_up, 0.20))
+    with e2: st.metric("Up ≥50%",  _rate_from_bool(dff, up50)  if up50  else _rate_from_numeric(dff, max_up, 0.50))
+    with e3: st.metric("Up ≥100%", _rate_from_bool(dff, up100) if up100 else _rate_from_numeric(dff, max_up, 1.00))
+    with e4: st.metric("Down ≥20%",  _rate_from_bool(dff, dn20)  if dn20  else _rate_from_numeric(dff, max_dn, 0.20))
+    with e5: st.metric("Down ≥50%",  _rate_from_bool(dff, dn50)  if dn50  else _rate_from_numeric(dff, max_dn, 0.50))
+    with e6: st.metric("Down ≥100%", _rate_from_bool(dff, dn100) if dn100 else _rate_from_numeric(dff, max_dn, 1.00))
 
-    if not any([up20_col, up50_col, up100_col, dn20_col, dn50_col, dn100_col, max_up_col, max_dn_col]):
-        st.caption("ℹ️ To populate these metrics, add boolean columns like "
-                   "`hit_up20`, `hit_up50`, `hit_up100`, `hit_dn20`, `hit_dn50`, `hit_dn100` "
-                   "or numeric `max_up_ext` / `max_dn_ext` (fractions of OR).")
+    if not any([up20, up50, up100, dn20, dn50, dn100, max_up, max_dn]):
+        st.caption("ℹ️ No extension columns detected. Add boolean hits "
+                   "`hit_up20/50/100`, `hit_dn20/50/100` or numeric `max_up_ext`/`max_dn_ext` "
+                   "(fractions of OR).")
 
-    # ---- Display the filtered table with friendly headers + boolean highlighting
-    rename = {
-        "trade_date":"Date","symbol":"Symbol","or_window":"OR Time",
-        "orh":"ORH","orl":"ORL","or_range":"OR Range",
-        "first_break":"First Break","broke_up":"Broke Up",
-        "broke_down":"Broke Down","broke_both":"Broke Both",
-    }
-    table = df.rename(columns={k:v for k,v in rename.items() if k in df.columns}).copy()
+    # Return filtered DF so App.py keeps your standard styling
+    return dff
 
-    # Limit display columns to a clean set (optional)
-    show_cols = [c for c in ["Date","Symbol","OR Time","ORH","ORL","OR Range","First Break","Broke Up","Broke Down","Broke Both"] if c in table.columns]
-    if show_cols:
-        table = table[show_cols]
-
-    # Re-round for display safety
-    for c in ["ORH","ORL","OR Range"]:
-        if c in table.columns:
-            table[c] = pd.to_numeric(table[c], errors="coerce").round(2)
-
-    # === Match your green highlighting ===
-    def _color_hits(val):
-        if val is True or str(val).lower() == "true":
-            return "background-color: #98FB98"
-        return ""
-
-    def _detect_bool_like_columns(dfx: pd.DataFrame):
-        bool_cols = []
-        for c in dfx.columns:
-            s = dfx[c]
-            if s.dtype == bool:
-                bool_cols.append(c)
-            else:
-                nonnull = s.dropna().astype(str).str.lower().unique()
-                if len(nonnull) > 0 and set(nonnull).issubset({"true", "false"}):
-                    bool_cols.append(c)
-        return bool_cols
-
-    styler = table.style.hide(axis="index")
-    table_styles = [
-        {"selector": "table", "props": [("border-collapse", "collapse")]},
-        {"selector": "th, td", "props": [("border", "1px solid #E5E7EB"), ("padding", "6px 8px")]},
-        {"selector": "thead th", "props": [("font-weight", "700"), ("color", "#000")]}
-    ]
-    styler = styler.set_table_styles(table_styles)
-
-    bool_like = _detect_bool_like_columns(table)
-    if bool_like:
-        styler = styler.map(_color_hits, subset=bool_like)
-
-    # Render with same sticky header/scroll container pattern you use in app.py
-    html_table = styler.to_html()
-    st.markdown("""
-        <style>
-        .scroll-table-container {
-            max-height: 600px;
-            overflow-y: auto;
-            border: 1px solid #E5E7EB;
-        }
-        .scroll-table-container table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .scroll-table-container thead th {
-            position: sticky;
-            top: 0;
-            z-index: 3;
-            background-color: #d0d0d0 !important;
-            color: #000;
-            font-weight: 700;
-            background-image: linear-gradient(to bottom,
-                rgba(0,0,0,0) calc(100% - 3px),
-                #000 calc(100% - 3px),
-                #000 100%
-            ) !important;
-            background-clip: padding-box;
-            border-bottom: none !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-    st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
-
-    # ---- Download (raw df so you keep all columns)
-    st.download_button(
-        "Download CSV",
-        df.to_csv(index=False),
-        "spx_opening_range_stats_filtered.csv",
-        "text/csv"
-    )
-
-    return True
+# -------------------- Compatibility stub (no-op override) --------------------
+def render_view_override(view_id: str) -> bool:
+    """
+    Deprecated: Do not use table-level override anymore.
+    We filter + show metrics via 'spx_opening_range_filter_and_metrics' and
+    let App.py's generic renderer handle the table/styling.
+    """
+    return False
