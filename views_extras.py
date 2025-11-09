@@ -189,14 +189,19 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         s = pd.to_numeric(dfX[col], errors="coerce")
         return f"{100.0 * (s >= thr).mean():.1f}%"
 
-    up20 = _first_existing(dff, ["hit_up20","up20","or_up_20","hit_or_up_20"])
-    up50 = _first_existing(dff, ["hit_up50","up50","or_up_50","hit_or_up_50"])
-    up100= _first_existing(dff, ["hit_up100","up100","or_up_100","hit_or_up_100"])
-    dn20 = _first_existing(dff, ["hit_dn20","down20","or_dn_20","hit_or_dn_20"])
-    dn50 = _first_existing(dff, ["hit_dn50","down50","or_dn_50","hit_or_dn_50"])
-    dn100= _first_existing(dff, ["hit_dn100","down100","or_dn_100","hit_or_dn_100"])
-    max_up = _first_existing(dff, ["max_up_ext","max_up_frac","max_up_or_mult"])
-    max_dn = _first_existing(dff, ["max_dn_ext","max_dn_frac","max_dn_or_mult"])
+    # --- Extension metrics (≥20/50/100%) — use your actual column names first
+    up20 = _first_existing(dff, ["hit_20_up", "hit_up20", "up20", "or_up_20", "hit_or_up_20"])
+    up50 = _first_existing(dff, ["hit_50_up", "hit_up50", "up50", "or_up_50", "hit_or_up_50"])
+    up100 = _first_existing(dff, ["hit_100_up", "hit_up100", "up100", "or_up_100", "hit_or_up_100"])
+
+    dn20 = _first_existing(dff, ["hit_20_down", "hit_dn20", "down20", "or_dn_20", "hit_or_dn_20"])
+    dn50 = _first_existing(dff, ["hit_50_down", "hit_dn50", "down50", "or_dn_50", "hit_or_dn_50"])
+    dn100 = _first_existing(dff, ["hit_100_down", "hit_dn100", "down100", "or_dn_100", "hit_or_dn_100"])
+
+    # Your numeric columns:
+    max_up = _first_existing(dff, ["max_ext_up", "max_up_ext", "max_up_frac", "max_up_or_mult"])
+    max_dn = _first_existing(dff, ["max_ext_down", "max_dn_ext", "max_dn_frac", "max_dn_or_mult"])
+
 
     st.markdown("#### Extension hits (fraction of OR after the window completes)")
     e1, e2, e3, e4, e5, e6 = st.columns(6)
