@@ -242,9 +242,9 @@ HEADER_LABELS = {
     "SPX Opening Range": {
     "trade_date": "Date",
     "symbol": "Symbol",
-    "or_window": "OR Window",
-    "orh": "OR High",
-    "orl": "OR Low",
+    "or_window": "OR Time",
+    "orh": "ORH",
+    "orl": "ORL",
     "or_range": "OR Range",
     "first_break": "First Break",
     "broke_up": "Broke Up",
