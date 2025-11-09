@@ -23,7 +23,7 @@ BASE_TABLES = OrderedDict({
     "Range Extensions": ("es_range_extensions", "date"),
     "RTH Pivots": ("es_rth_pivot_levels", "trade_date"),   
     "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
-    "Opening Range Stats": ("es_opening_range_stats", "trade_date"),
+    "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
 })
 
 def _load_yaml_views(path="views.yaml"):
