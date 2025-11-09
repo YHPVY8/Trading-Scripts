@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 
-#import the tables/view builder
+# import the tables/view builder
 from views_config import build_tables
 
 # import the table with price levels below the pivot "hits"
@@ -13,7 +13,6 @@ from views_extras import render_current_levels
 from views_extras import spx_opening_range_filter_and_metrics
 
 
-
 # ---- CONFIG ----
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
 
@@ -21,7 +20,7 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# CHANGED: pull base tables + YAML-defined views
+# CHANGED: pull base tables + YAML/DB-defined views
 TABLES = build_tables(sb)
 
 st.title("Trading Dashboard")
@@ -45,10 +44,10 @@ else:
 # ---- Load ----
 response = (
     sb.table(table_name)
-    .select("*")
-    .order(date_col, desc=True)
-    .limit(limit)
-    .execute()
+      .select("*")
+      .order(date_col, desc=True)
+      .limit(limit)
+      .execute()
 )
 df = pd.DataFrame(response.data)
 
@@ -66,14 +65,6 @@ if date_col not in df.columns:
 if date_col in df.columns:
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.sort_values(date_col).reset_index(drop=True)
-
-# --- SPX Opening Range: filter to a single OR window + show metrics (keep generic styling)
-if choice == "SPX Opening Range":
-    from views_extras import spx_opening_range_filter_and_metrics
-    df = spx_opening_range_filter_and_metrics(df)
-    if df.empty:
-        st.info("No rows after applying the SPX window filter.")
-        st.stop()
 
 # --- CLEANUP PER DATASET ---
 if choice == "Daily ES" and "id" in df.columns:
@@ -131,11 +122,7 @@ elif choice in ["RTH Pivots", "ON Pivots"]:
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
-
-# (For full summary views, we don't force a fixed subset here.)
-
-# NEW: Generic view-level subset (from YAML dict views)
-# NEW: Generic view-level subset (from YAML dict views)
+# --- Generic view-level subset (from YAML/DB views) ---
 if keep_cols:
     # Ensure SPX extension columns are kept even if the view omitted them
     if choice == "SPX Opening Range":
@@ -148,6 +135,12 @@ if keep_cols:
         keep_cols = list(dict.fromkeys(list(keep_cols) + required_spx))
     df = df[[c for c in keep_cols if c in df.columns]]
 
+# --- SPX Opening Range: filter to a single OR window + show metrics (keep generic styling)
+if choice == "SPX Opening Range":
+    df = spx_opening_range_filter_and_metrics(df)
+    if df.empty:
+        st.info("No rows after applying the SPX window filter.")
+        st.stop()
 
 # ---- Format all numeric columns ----
 for col in df.columns:
@@ -194,8 +187,7 @@ THICK_BORDER_AFTER = {
     "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     "RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-"ON Pivots":  ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-
+    "ON Pivots":  ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
 }
 
 HEADER_LABELS = {
@@ -252,7 +244,7 @@ HEADER_LABELS = {
         "hit_r15": "R1.5", "hit_s15": "S1.5",
         "hit_r2": "R2", "hit_s2": "S2",
         "hit_r3": "R3", "hit_s3": "S3",
-},
+    },
     "ON Pivots": {
         "trade_date": "Date", "day": "Day",
         "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
@@ -261,20 +253,19 @@ HEADER_LABELS = {
         "hit_r15": "R1.5", "hit_s15": "S1.5",
         "hit_r2": "R2", "hit_s2": "S2",
         "hit_r3": "R3", "hit_s3": "S3",
-},
+    },
     "SPX Opening Range": {
-    "trade_date": "Date",
-    "symbol": "Symbol",
-    "or_window": "OR Time",
-    "orh": "ORH",
-    "orl": "ORL",
-    "or_range": "OR Range",
-    "first_break": "First Break",
-    "broke_up": "Broke Up",
-    "broke_down": "Broke Down",
-    "broke_both": "Broke Both",
-},
-
+        "trade_date": "Date",
+        "symbol": "Symbol",
+        "or_window": "OR Time",
+        "orh": "ORH",
+        "orl": "ORL",
+        "or_range": "OR Range",
+        "first_break": "First Break",
+        "broke_up": "Broke Up",
+        "broke_down": "Broke Down",
+        "broke_both": "Broke Both",
+    },
 }
 
 # Detect boolean-like columns anywhere in the dataframe
@@ -322,7 +313,7 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
 styled = make_excelish_styler(df, choice)
 html_table = styled.to_html()
 
-# NEW: Merge global header labels with per-view labels
+# Merge global header labels with per-view labels
 labels = HEADER_LABELS.get(choice, {}).copy()
 labels.update(header_labels)
 for orig, new in labels.items():
@@ -363,10 +354,10 @@ st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_al
 # optional spacer
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-# NEW:
+# Pivot levels block (only renders for pivot tables)
 render_current_levels(sb, choice, table_name, date_col)
 
-
+# Download
 st.download_button(
     "💾 Download filtered CSV",
     df.to_csv(index=False).encode("utf-8"),
