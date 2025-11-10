@@ -17,18 +17,28 @@ USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 def _upsert_trades_from_rows(rows):
     """
     Upsert CSV rows into tj_trades using your actual headers:
-    Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Fees, PnL, Size, Type, Commissions, ...
-    Keeps EST/clock time as-is by stripping any timezone suffix from the string.
+    Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Size, Type, PnL, Fees, Commissions
+    Keeps EST/clock time by stripping the trailing timezone and formatting in ISO for PostgREST.
+    Shows a few errors if any rows fail.
     """
-    def _naive_from_str(ts_str: str):
-        """Return the same clock time without the trailing ' +/-HH:MM' offset, e.g. '11/04/2025 15:00:17'"""
+    def _to_iso(ts_str: str):
         if not ts_str:
             return None
-        # Common pattern in your file: 'MM/DD/YYYY HH:MM:SS -03:00'
-        parts = ts_str.rsplit(" ", 1)
-        return parts[0] if len(parts) == 2 and (parts[1].startswith("+") or parts[1].startswith("-")) else ts_str
+        s = str(ts_str).strip()
+        # Strip trailing " +/-HH:MM" (e.g., '11/04/2025 15:00:17 -03:00' -> '11/04/2025 15:00:17')
+        parts = s.rsplit(" ", 1)
+        if len(parts) == 2 and len(parts[1]) == 6 and parts[1][3] == ":" and (parts[1][0] in "+-"):
+            s = parts[0]
+        # Parse and reformat to ISO 'YYYY-MM-DD HH:MM:SS'
+        dt = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
+        if pd.isna(dt):
+            return None
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    inserted = skipped = 0
+    inserted = 0
+    skipped = 0
+    errs = []  # collect first few errors to display
+
     for r in rows:
         try:
             ext_id = r.get("Id")
@@ -36,42 +46,29 @@ def _upsert_trades_from_rows(rows):
                 skipped += 1
                 continue
 
-            # Map side from Type (supports 'Long'/'Short' and 'Buy'/'Sell')
+            # Side mapping supports Long/Short and Buy/Sell
             t = (r.get("Type", "") or "").strip().lower()
-            if t in ("long", "buy", "b"):
-                side = "long"
-            elif t in ("short", "sell", "s"):
-                side = "short"
-            else:
-                side = None  # allow null; you can edit later in the grid
+            side = "long" if t in ("long", "buy", "b") else ("short" if t in ("short", "sell", "s") else None)
 
-            # Quantity is 'Size' in your export
+            # Quantity = Size
             qty_val = r.get("Size") or r.get("Quantity") or r.get("Qty")
 
-            # Symbol use ContractName; optionally keep root only (e.g., MES from MESZ5)
+            # Symbol = ContractName
             contract = (r.get("ContractName") or r.get("Symbol") or "").strip().upper()
-            symbol = contract  # or: ''.join([ch for ch in contract if ch.isalpha()])  # root only
+            symbol = contract or None
 
-            # Fees: include both Fees and Commissions if present
-            fees_val = 0.0
-            for k in ("Fees", "Commissions"):
-                v = r.get(k)
-                if v not in (None, "", "NaN"):
-                    try:
-                        fees_val += float(v)
-                    except Exception:
-                        pass
+            # Fees = Fees + Commissions
+            f1 = pd.to_numeric(r.get("Fees"), errors="coerce")
+            f2 = pd.to_numeric(r.get("Commissions"), errors="coerce")
+            fees_val = (0 if pd.isna(f1) else float(f1)) + (0 if pd.isna(f2) else float(f2))
 
             payload = {
                 "user_id": USER_ID,
                 "external_trade_id": ext_id,
-                "symbol": symbol or None,
+                "symbol": symbol,
                 "side": side,
-
-                # Keep clock time as-is (strip trailing tz)
-                "entry_ts_est": _naive_from_str(r.get("EnteredAt")),
-                "exit_ts_est":  _naive_from_str(r.get("ExitedAt")),
-
+                "entry_ts_est": _to_iso(r.get("EnteredAt")),
+                "exit_ts_est":  _to_iso(r.get("ExitedAt")),
                 "entry_px":  float(r["EntryPrice"]) if r.get("EntryPrice")  not in (None, "") else None,
                 "exit_px":   float(r["ExitPrice"])  if r.get("ExitPrice")   not in (None, "") else None,
                 "qty":       float(qty_val)         if qty_val               not in (None, "") else None,
@@ -80,11 +77,20 @@ def _upsert_trades_from_rows(rows):
                 "source": "csv",
             }
 
+            # sanity: require minimally entry_ts_est and exit_ts_est
+            if not payload["entry_ts_est"] or not payload["exit_ts_est"]:
+                raise ValueError(f"Bad timestamps for Id={ext_id}: {r.get('EnteredAt')} / {r.get('ExitedAt')}")
+
             sb.table("tj_trades").upsert(payload, on_conflict="user_id,external_trade_id").execute()
             inserted += 1
-        except Exception:
+
+        except Exception as e:
             skipped += 1
-    return inserted, skipped
+            if len(errs) < 5:
+                errs.append({"Id": r.get("Id"), "error": str(e)})
+
+    return inserted, skipped, errs
+
 
 
 @st.cache_data(ttl=60)
@@ -131,16 +137,20 @@ tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "G
 with tab_upload:
     st.subheader("Upload CSV")
     up = st.file_uploader(
-        "Drop your trade export (Id, Type, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Quantity, PnL, Fees, ...)",
+        "Drop your trade export (Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Size, Type, PnL, Fees, Commissions, ...)",
         type=["csv"]
     )
     if up:
         content = up.read().decode("utf-8", errors="ignore")
         rows = list(csv.DictReader(io.StringIO(content)))
-        ins, skip = _upsert_trades_from_rows(rows)
+        ins, skip, errs = _upsert_trades_from_rows(rows)
         st.success(f"Imported {ins} rows (skipped {skip}).")
+        if errs:
+            st.error("Sample errors:")
+            st.json(errs)
         st.cache_data.clear()
         st.rerun()
+
 
 # ---- Trades ----
 with tab_trades:
