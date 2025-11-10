@@ -3,5 +3,4 @@ pandas
 supabase
 numpy
 PyYAML==6.0.2
-st-aggrid==0.3.4
 
