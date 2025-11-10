@@ -70,11 +70,12 @@ if date_col in df.columns:
 if choice == "Daily ES" and "id" in df.columns:
     df = df.drop(columns=["id"])
 
-# Format common date-like columns
+# Format common date-like columns (initial pass)
 if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-if "trade_date" in df.columns:
+if "trade_date" in df.columns and choice != "SPX Opening Range":
+    # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 if "time" in df.columns:
@@ -114,7 +115,6 @@ elif choice == "Range Extensions":
     df = df[[c for c in keep_fixed if c in df.columns]]
 
 elif choice in ["RTH Pivots", "ON Pivots"]:
-    # Mirror Daily Pivots but use trade_date instead of date
     keep_cols_fixed = [
         "trade_date", "day",
         "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
@@ -123,14 +123,18 @@ elif choice in ["RTH Pivots", "ON Pivots"]:
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 # --- Generic view-level subset (from YAML/DB views) ---
-# --- SPX Opening Range: filter + order columns (always run this block)
+if keep_cols:
+    df = df[[c for c in keep_cols if c in df.columns]]
+
+# --- SPX Opening Range: filter + order columns (run once, here) ---
 if choice == "SPX Opening Range":
+    # Filter to selected OR window + show top metrics
     df = spx_opening_range_filter_and_metrics(df)
     if df.empty:
         st.info("No rows after applying the SPX window filter.")
         st.stop()
 
-    # ---- Enforce clean column order for SPX Opening Range ----
+    # Desired display order for SPX
     desired_order = [
         "trade_date", "day_of_week", "open_location", "symbol",
         "or_window", "orh", "orl", "or_range",
@@ -141,14 +145,9 @@ if choice == "SPX Opening Range":
     ]
     df = df[[c for c in desired_order if c in df.columns]]
 
-
-
-# --- SPX Opening Range: filter to a single OR window + show metrics (keep generic styling)
-if choice == "SPX Opening Range":
-    df = spx_opening_range_filter_and_metrics(df)
-    if df.empty:
-        st.info("No rows after applying the SPX window filter.")
-        st.stop()
+    # Reformat trade_date back to string for display
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 # ---- Format all numeric columns ----
 for col in df.columns:
