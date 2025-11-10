@@ -1,19 +1,21 @@
-# pages/Trading Stats.py
+# pages/Trading Performance.py
 #!/usr/bin/env python3
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 import io, csv
 
-st.set_page_config(page_title="Trading Stats (EST)", layout="wide")
+st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
-# ---- Supabase client ----
-sb = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+# ---- Supabase client (your pattern) ----
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 # ---------- DB helpers ----------
 def _upsert_trades_from_rows(rows):
+    """Upsert CSV rows into tj_trades. Keeps EST timestamps as-is."""
     inserted = skipped = 0
     for r in rows:
         try:
@@ -30,14 +32,14 @@ def _upsert_trades_from_rows(rows):
                 "external_trade_id": ext_id,
                 "symbol": (r.get("Symbol") or r.get("Market") or "").upper() or None,
                 "side": side,
-                # Keep EST clock-time as-is (naive timestamps)
+                # Keep EST clock-time as naive timestamps
                 "entry_ts_est": pd.to_datetime(r.get("EnteredAt")) if r.get("EnteredAt") else None,
                 "exit_ts_est":  pd.to_datetime(r.get("ExitedAt"))  if r.get("ExitedAt")  else None,
-                "entry_px": float(r["EntryPrice"]) if r.get("EntryPrice") not in (None,"") else None,
-                "exit_px":  float(r["ExitPrice"])  if r.get("ExitPrice")  not in (None,"") else None,
-                "qty":      float(r["Quantity"])   if r.get("Quantity")   not in (None,"") else None,
-                "pnl_gross":float(r["PnL"])        if r.get("PnL")        not in (None,"") else None,
-                "fees":     float(r["Fees"])       if r.get("Fees")       not in (None,"") else 0.0,
+                "entry_px": float(r["EntryPrice"]) if r.get("EntryPrice") not in (None, "") else None,
+                "exit_px":  float(r["ExitPrice"])  if r.get("ExitPrice")  not in (None, "") else None,
+                "qty":      float(r["Quantity"])   if r.get("Quantity")   not in (None, "") else None,
+                "pnl_gross":float(r["PnL"])        if r.get("PnL")        not in (None, "") else None,
+                "fees":     float(r["Fees"])       if r.get("Fees")       not in (None, "") else 0.0,
                 "source": "csv",
             }
             sb.table("tj_trades").upsert(payload, on_conflict="user_id,external_trade_id").execute()
@@ -82,14 +84,17 @@ def _get_groups():
     return res.data or []
 
 # ---------- UI ----------
-st.title("Trading Stats (EST)")
+st.title("Trading Performance (EST)")
 
 tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "Groups", "Guardrails"])
 
 # ---- Upload ----
 with tab_upload:
     st.subheader("Upload CSV")
-    up = st.file_uploader("Drop your trade export (Id, Type, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Quantity, PnL, Fees, ...)", type=["csv"])
+    up = st.file_uploader(
+        "Drop your trade export (Id, Type, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Quantity, PnL, Fees, ...)",
+        type=["csv"]
+    )
     if up:
         content = up.read().decode("utf-8", errors="ignore")
         rows = list(csv.DictReader(io.StringIO(content)))
@@ -105,41 +110,70 @@ with tab_trades:
     if df.empty:
         st.info("No trades yet — upload a CSV in the Upload tab.")
     else:
-        # Editable fields
-        editable = ["planned_risk", "r_multiple", "review_status"]
+        orig = df.copy()
 
-        gb = GridOptionsBuilder.from_dataframe(df)
-        gb.configure_selection("multiple", use_checkbox=True)
-        gb.configure_pagination(enabled=True, paginationAutoPageSize=False, paginationPageSize=50)
-        gb.configure_default_column(filter=True, sortable=True, resizable=True)
-        for c in editable:
-            gb.configure_column(c, editable=True)
-        gb.configure_column("entry_ts_est", headerName="Entry (EST)")
-        gb.configure_column("exit_ts_est", headerName="Exit (EST)")
-        grid = AgGrid(
-            df,
-            gridOptions=gb.build(),
-            update_mode=GridUpdateMode.MODEL_CHANGED | GridUpdateMode.SELECTION_CHANGED,
-            height=520,
+        # Selection column for bulk actions
+        if "selected" not in df.columns:
+            df.insert(0, "selected", False)
+
+        # Pretty labels for timestamps
+        rename_map = {"entry_ts_est": "Entry (EST)", "exit_ts_est": "Exit (EST)"}
+        df_display = df.rename(columns=rename_map)
+
+        # Editable columns in the grid
+        editable_cols = ["selected", "planned_risk", "r_multiple", "review_status"]
+
+        edited = st.data_editor(
+            df_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "selected": st.column_config.CheckboxColumn("✓", help="Select for bulk actions"),
+                "planned_risk": st.column_config.NumberColumn("Planned Risk", step=0.01),
+                "r_multiple": st.column_config.NumberColumn("R Multiple", step=0.01),
+                "review_status": st.column_config.SelectboxColumn(
+                    "Review Status", options=["unreviewed", "flagged", "reviewed"]
+                ),
+            },
+            disabled=[c for c in df_display.columns if c not in editable_cols],
+            num_rows="fixed",
         )
 
-        # Persist inline edits for planned_risk / r_multiple / review_status
-        if "data" in grid and grid["data"] is not None:
-            edited = pd.DataFrame(grid["data"])
-            if not edited[["id"]+editable].equals(df[["id"]+editable]):
-                rows = edited[["id"]+editable].to_dict(orient="records")
-                sb.table("tj_trades").upsert(rows, on_conflict="id").execute()
-                st.toast("Saved inline edits")
-                st.cache_data.clear()
+        # Back to original column names
+        edited = edited.rename(columns={v: k for k, v in rename_map.items()})
 
-        sel = grid.get("selected_rows", [])
-        sel_ids = [r["id"] for r in sel]
+        # ---------- Persist inline edits (planned_risk / r_multiple / review_status) ----------
+        diff_cols = ["planned_risk", "r_multiple", "review_status"]
+        to_update = []
+        merged = edited.merge(orig[["id"] + diff_cols], on="id", suffixes=("", "_old"))
+        for _, r in merged.iterrows():
+            changed = any(
+                (pd.isna(r[c]) and not pd.isna(r[f"{c}_old"])) or
+                (not pd.isna(r[c]) and pd.isna(r[f"{c}_old"])) or
+                (r[c] != r[f"{c}_old"])
+                for c in diff_cols
+            )
+            if changed:
+                to_update.append({
+                    "id": r["id"],
+                    "planned_risk": r["planned_risk"],
+                    "r_multiple": r["r_multiple"],
+                    "review_status": r["review_status"],
+                })
+        if to_update:
+            sb.table("tj_trades").upsert(to_update, on_conflict="id").execute()
+            st.toast(f"Saved {len(to_update)} inline edit(s)")
+            st.cache_data.clear()
 
-        with st.form("bulk_actions", clear_on_submit=True):
-            st.write(f"Selected: {len(sel_ids)}")
+        # ---------- Bulk actions (comments, tags, groups) ----------
+        selected_ids = edited.loc[edited["selected"] == True, "id"].tolist()
+
+        with st.form("bulk_actions_native", clear_on_submit=True):
+            st.write(f"Selected: {len(selected_ids)}")
             comment = st.text_area("Add comment (markdown)")
             tag_str = st.text_input("Add tags (comma-separated)")
             gmode = st.radio("Group", ["None", "Add to existing", "Create new"], horizontal=True)
+
             existing = None
             new_group = None
             notes = None
@@ -147,26 +181,31 @@ with tab_trades:
                 groups = _get_groups()
                 if groups:
                     labels = [f"{g['name']} ({g['id'][:6]})" for g in groups]
-                    idx = st.selectbox("Pick group", list(range(len(labels))), format_func=lambda i: labels[i] if labels else None)
-                    if groups:
+                    idx = st.selectbox(
+                        "Pick group",
+                        list(range(len(labels))) if labels else [],
+                        format_func=lambda i: labels[i] if labels else None
+                    )
+                    if groups and len(groups) > 0:
                         existing = groups[idx]["id"]
                 else:
                     st.info("No groups yet — choose 'Create new'.")
             elif gmode == "Create new":
                 new_group = st.text_input("New group name")
                 notes = st.text_input("Group notes (optional)")
+
             do = st.form_submit_button("Apply")
 
-        if do and sel_ids:
+        if do and selected_ids:
             if comment:
-                _save_comments(sel_ids, comment)
+                _save_comments(selected_ids, comment)
             tags = [t.strip() for t in tag_str.split(",") if t.strip()]
             if tags:
-                _save_tags(sel_ids, tags)
+                _save_tags(selected_ids, tags)
             if gmode == "Add to existing" and existing:
-                _add_to_group(sel_ids, group_id=existing)
+                _add_to_group(selected_ids, group_id=existing)
             elif gmode == "Create new" and new_group:
-                _add_to_group(sel_ids, new_group_name=new_group, notes=notes)
+                _add_to_group(selected_ids, new_group_name=new_group, notes=notes)
             st.success("Saved")
             st.cache_data.clear()
             st.rerun()
@@ -189,7 +228,7 @@ with tab_groups:
             st.info("No trades in this group yet.")
         else:
             show_cols = ["external_trade_id","symbol","side","entry_ts_est","exit_ts_est","qty","pnl_net","r_multiple","review_status"]
-            st.dataframe(gdf[show_cols])
+            st.dataframe(gdf[show_cols], use_container_width=True)
             st.write(f"Group PnL (net): {gdf['pnl_net'].sum():,.2f}")
 
 # ---- Guardrails ----
@@ -243,6 +282,6 @@ with tab_guards:
                 last_loss_exit = None
 
         if hits:
-            st.dataframe(pd.DataFrame(hits))
+            st.dataframe(pd.DataFrame(hits), use_container_width=True)
         else:
             st.success("No guardrail hits.")
