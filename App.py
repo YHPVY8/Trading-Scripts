@@ -123,24 +123,24 @@ elif choice in ["RTH Pivots", "ON Pivots"]:
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 # --- Generic view-level subset (from YAML/DB views) ---
-if keep_cols:
-    # Ensure SPX extension columns are kept even if the view omitted them
-    if choice == "SPX Opening Range":
-        df = spx_opening_range_filter_and_metrics(df)
-        if df.empty:
-            st.info("No rows after applying the SPX window filter.")
-            st.stop()
+# --- SPX Opening Range: filter + order columns (always run this block)
+if choice == "SPX Opening Range":
+    df = spx_opening_range_filter_and_metrics(df)
+    if df.empty:
+        st.info("No rows after applying the SPX window filter.")
+        st.stop()
 
-        # ---- Enforce clean column order for SPX Opening Range ----
-        desired_order = [
-            "trade_date", "day_of_week", "open_location", "symbol",
-            "or_window", "orh", "orl", "or_range",
-            "first_break", "broke_up", "broke_down", "broke_both",
-            "hit_20_up", "hit_20_down", "hit_50_up", "hit_50_down",
-            "hit_100_up", "hit_100_down", "max_ext_up", "max_ext_down",
-            "time_to_first_break_seconds"
-        ]
-        df = df[[c for c in desired_order if c in df.columns]]
+    # ---- Enforce clean column order for SPX Opening Range ----
+    desired_order = [
+        "trade_date", "day_of_week", "open_location", "symbol",
+        "or_window", "orh", "orl", "or_range",
+        "first_break", "broke_up", "broke_down", "broke_both",
+        "hit_20_up", "hit_20_down", "hit_50_up", "hit_50_down",
+        "hit_100_up", "hit_100_down", "max_ext_up", "max_ext_down",
+        "time_to_first_break_seconds"
+    ]
+    df = df[[c for c in desired_order if c in df.columns]]
+
 
 
 # --- SPX Opening Range: filter to a single OR window + show metrics (keep generic styling)
