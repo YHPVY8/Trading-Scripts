@@ -15,7 +15,19 @@ USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 # ---------- DB helpers ----------
 def _upsert_trades_from_rows(rows):
-    """Upsert CSV rows into tj_trades. Keeps EST timestamps as-is."""
+    """
+    Upsert CSV rows into tj_trades using your actual headers:
+    Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Fees, PnL, Size, Type, Commissions, ...
+    Keeps EST/clock time as-is by stripping any timezone suffix from the string.
+    """
+    def _naive_from_str(ts_str: str):
+        """Return the same clock time without the trailing ' +/-HH:MM' offset, e.g. '11/04/2025 15:00:17'"""
+        if not ts_str:
+            return None
+        # Common pattern in your file: 'MM/DD/YYYY HH:MM:SS -03:00'
+        parts = ts_str.rsplit(" ", 1)
+        return parts[0] if len(parts) == 2 and (parts[1].startswith("+") or parts[1].startswith("-")) else ts_str
+
     inserted = skipped = 0
     for r in rows:
         try:
@@ -24,29 +36,56 @@ def _upsert_trades_from_rows(rows):
                 skipped += 1
                 continue
 
-            t = (r.get("Type","") or "").strip().lower()
-            side = "long" if t.startswith("b") else ("short" if t.startswith("s") else None)
+            # Map side from Type (supports 'Long'/'Short' and 'Buy'/'Sell')
+            t = (r.get("Type", "") or "").strip().lower()
+            if t in ("long", "buy", "b"):
+                side = "long"
+            elif t in ("short", "sell", "s"):
+                side = "short"
+            else:
+                side = None  # allow null; you can edit later in the grid
+
+            # Quantity is 'Size' in your export
+            qty_val = r.get("Size") or r.get("Quantity") or r.get("Qty")
+
+            # Symbol use ContractName; optionally keep root only (e.g., MES from MESZ5)
+            contract = (r.get("ContractName") or r.get("Symbol") or "").strip().upper()
+            symbol = contract  # or: ''.join([ch for ch in contract if ch.isalpha()])  # root only
+
+            # Fees: include both Fees and Commissions if present
+            fees_val = 0.0
+            for k in ("Fees", "Commissions"):
+                v = r.get(k)
+                if v not in (None, "", "NaN"):
+                    try:
+                        fees_val += float(v)
+                    except Exception:
+                        pass
 
             payload = {
                 "user_id": USER_ID,
                 "external_trade_id": ext_id,
-                "symbol": (r.get("Symbol") or r.get("Market") or "").upper() or None,
+                "symbol": symbol or None,
                 "side": side,
-                # Keep EST clock-time as naive timestamps
-                "entry_ts_est": pd.to_datetime(r.get("EnteredAt")) if r.get("EnteredAt") else None,
-                "exit_ts_est":  pd.to_datetime(r.get("ExitedAt"))  if r.get("ExitedAt")  else None,
-                "entry_px": float(r["EntryPrice"]) if r.get("EntryPrice") not in (None, "") else None,
-                "exit_px":  float(r["ExitPrice"])  if r.get("ExitPrice")  not in (None, "") else None,
-                "qty":      float(r["Quantity"])   if r.get("Quantity")   not in (None, "") else None,
-                "pnl_gross":float(r["PnL"])        if r.get("PnL")        not in (None, "") else None,
-                "fees":     float(r["Fees"])       if r.get("Fees")       not in (None, "") else 0.0,
+
+                # Keep clock time as-is (strip trailing tz)
+                "entry_ts_est": _naive_from_str(r.get("EnteredAt")),
+                "exit_ts_est":  _naive_from_str(r.get("ExitedAt")),
+
+                "entry_px":  float(r["EntryPrice"]) if r.get("EntryPrice")  not in (None, "") else None,
+                "exit_px":   float(r["ExitPrice"])  if r.get("ExitPrice")   not in (None, "") else None,
+                "qty":       float(qty_val)         if qty_val               not in (None, "") else None,
+                "pnl_gross": float(r["PnL"])        if r.get("PnL")         not in (None, "") else None,
+                "fees":      fees_val,
                 "source": "csv",
             }
+
             sb.table("tj_trades").upsert(payload, on_conflict="user_id,external_trade_id").execute()
             inserted += 1
         except Exception:
             skipped += 1
     return inserted, skipped
+
 
 @st.cache_data(ttl=60)
 def _load_trades(limit=4000):
