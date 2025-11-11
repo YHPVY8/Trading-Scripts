@@ -259,6 +259,7 @@ with tab_upload:
                         st.json(errs)
 
 # ---- Trades ----
+# ---- Trades ----
 with tab_trades:
     st.subheader("Trades")
 
@@ -273,22 +274,26 @@ with tab_trades:
 
         # Show external id (your CSV Id) and hide the internal UUID in the UI
         rename_map = {
-            "external_trade_id": "Trade ID",   # <- front and center
+            "external_trade_id": "Trade ID",   # show your CSV Id
             "entry_ts_est": "Entry (EST)",
-            "exit_ts_est":  "Exit (EST)",
+            "exit_ts_est": "Exit (EST)",
             "pnl_net": "PnL (Net)",
         }
+
         # Insert selection checkbox
         if "selected" not in df.columns:
             df.insert(0, "selected", False)
 
-        # Reorder to a clean view
-        view_cols = [
-            "selected", "external_trade_id", "symbol", "side",
-            "Entry (EST)", "Exit (EST)", "qty", "pnl_net", "r_multiple", "review_status", "tags"
-        ]
+        # Rename for display
         df_display = df.rename(columns=rename_map)
-        # Ensure all view cols exist
+
+        # Clean view columns: use the *renamed* column labels here
+        view_cols = [
+            "selected", "Trade ID", "symbol", "side",
+            "Entry (EST)", "Exit (EST)", "qty", "PnL (Net)", "r_multiple",
+            "review_status", "tags"
+        ]
+        # keep only ones that exist
         view_cols = [c for c in view_cols if c in df_display.columns]
 
         edited = st.data_editor(
@@ -298,22 +303,28 @@ with tab_trades:
             column_config={
                 "selected": st.column_config.CheckboxColumn("✓", help="Select for bulk actions"),
                 "qty": st.column_config.NumberColumn("Qty", step=1),
-                "pnl_net": st.column_config.NumberColumn("PnL (Net)", step=0.01, format="%.2f"),
+                "PnL (Net)": st.column_config.NumberColumn("PnL (Net)", step=0.01, format="%.2f"),
                 "r_multiple": st.column_config.NumberColumn("R Multiple", step=0.01),
                 "review_status": st.column_config.SelectboxColumn(
                     "Review Status", options=["unreviewed", "flagged", "reviewed"]
                 ),
                 "tags": st.column_config.TextColumn("Tags (read-only)"),
             },
-            disabled=[c for c in df_display[view_cols].columns if c not in ("selected","r_multiple","review_status")],
+            # Only allow edits to these:
+            disabled=[c for c in view_cols if c not in ("selected", "r_multiple", "review_status")],
             num_rows="fixed",
         )
 
-        # Map back to original names to compute changes
+        # Map back to original names so we have external_trade_id for merging
         edited_back = edited.rename(columns={v: k for k, v in rename_map.items()})
+
         # Join the hidden internal id so we can persist changes
-        edited_back = edited_back.merge(df[["external_trade_id","id","planned_risk","r_multiple","review_status"]],
-                                        on="external_trade_id", how="left")
+        # (df still has original column names)
+        edited_back = edited_back.merge(
+            df[["external_trade_id", "id", "planned_risk", "r_multiple", "review_status"]],
+            on="external_trade_id",
+            how="left"
+        )
 
         # Persist inline edits (r_multiple / review_status)
         diff_cols = ["r_multiple", "review_status"]
@@ -347,20 +358,20 @@ with tab_trades:
             ftag = st.multiselect("Filter by tag(s)", all_tags, [])
             filtered = edited_back
             if ftag:
-                # keep rows having all selected tags
                 has = []
                 for _, r in edited_back.iterrows():
                     tset = set(tagmap.get(r["id"], []))
-                    if all(t in tset for t in ftag):
-                        has.append(True)
-                    else:
-                        has.append(False)
+                    has.append(all(t in tset for t in ftag))
                 filtered = edited_back[has]
             st.write(f"Showing {len(filtered)} of {len(edited_back)}")
 
         with right:
             # Bulk actions panel
-            selected_ids = edited_back.loc[edited_back.get("selected", False) == True, "id"].tolist()
+            # NOTE: edited_back has the 'selected' column carried through from the editor
+            if "selected" in edited_back.columns:
+                selected_ids = edited_back.loc[edited_back["selected"] == True, "id"].tolist()
+            else:
+                selected_ids = []
             st.write(f"Selected: {len(selected_ids)}")
 
             with st.form("bulk_actions_native", clear_on_submit=True):
@@ -402,7 +413,8 @@ with tab_trades:
                     _add_to_group(selected_ids, new_group_name=new_group, notes=notes)
                 st.success("Saved")
                 st.cache_data.clear()
-                st.experimental_rerun()
+                st.rerun()
+
 
 # ---- Groups ----
 with tab_groups:
