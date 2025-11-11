@@ -491,11 +491,12 @@ with tab_trades:
         # Map back to original names and bring internal id for persistence
         edited_back = edited.rename(columns={v: k for k, v in rename_map.items()})
         edited_back = edited_back.merge(
-            df[{"external_trade_id", "id", "r_multiple", "review_status"}],
+            df[["external_trade_id", "id", "r_multiple", "review_status"]],
             on="external_trade_id",
             how="left",
             suffixes=("", "_old"),
         )
+
 
         # Persist inline edits (r_multiple / review_status)
         diff_cols = ["r_multiple", "review_status"]
