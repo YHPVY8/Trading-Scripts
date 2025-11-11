@@ -11,7 +11,7 @@ from supabase import create_client
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
 # ===== CONFIG =====
-USE_USER_SCOPING = False  # leave False (global). Flip True only if you later add USER_ID scoping.
+USE_USER_SCOPING = False  # keep False (global). Flip True only if you later add USER_ID scoping.
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -26,12 +26,15 @@ def _clean_header(name: str) -> str:
     return s.lower()
 
 def _to_iso_est(ts_str: str):
+    """Keep EST wall-clock: strip trailing timezone token like '-03:00' if present; return 'YYYY-MM-DD HH:MM:SS' or None."""
     if not ts_str:
         return None
     s = str(ts_str).strip()
+    # If the last token looks like a timezone offset ("-03:00" or "+00:00"), drop it
     parts = s.rsplit(" ", 1)
     if len(parts) == 2 and len(parts[1]) == 6 and parts[1][3] == ":" and (parts[1][0] in "+-"):
         s = parts[0]
+    # Parse flexibly
     dt = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
     if pd.isna(dt):
         return None
@@ -63,10 +66,10 @@ def _as_float(x):
 def _read_csv_to_rows(uploaded_bytes: bytes):
     df = pd.read_csv(
         io.BytesIO(uploaded_bytes),
-        sep=None,
+        sep=None,                 # auto-detect comma or tab
         engine="python",
         dtype=str,
-        keep_default_na=False,
+        keep_default_na=False,    # keep empty cells as "", not NaN
     )
     original_headers = list(df.columns)
     norm_headers = [_clean_header(h) for h in original_headers]
@@ -125,12 +128,19 @@ def _upsert_trades_from_rows(rows):
             f2 = _as_float(r.get("commissions")) or 0.0
             fees_val = float(f1) + float(f2)
 
+            entry_iso = _to_iso_est(r.get("enteredat"))
+            exit_iso  = _to_iso_est(r.get("exitedat"))
+
+            # ---- Only require entry timestamp. Exit can be None (open trade).
+            if not entry_iso:
+                raise ValueError(f"Missing/Bad EnteredAt: {r.get('enteredat')}")
+
             payload = {
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
-                "entry_ts_est": _to_iso_est(r.get("enteredat")),
-                "exit_ts_est":  _to_iso_est(r.get("exitedat")),
+                "entry_ts_est": entry_iso,
+                "exit_ts_est":  exit_iso,           # may be None for open trades
                 "entry_px":  _as_float(r.get("entryprice")),
                 "exit_px":   _as_float(r.get("exitprice")),
                 "qty":       _as_float(qty_val),
@@ -144,17 +154,19 @@ def _upsert_trades_from_rows(rows):
             if len(samples) < 5:
                 samples.append(dict(payload))
 
-            if not payload["entry_ts_est"] or not payload["exit_ts_est"]:
-                raise ValueError(f"Bad timestamps: {r.get('enteredat')} / {r.get('exitedat')}")
-
             conflict_target = "user_id,external_trade_id" if USE_USER_SCOPING else "external_trade_id"
             sb.table("tj_trades").upsert(payload, on_conflict=conflict_target).execute()
             inserted += 1
 
         except Exception as e:
             skipped += 1
-            if len(errs) < 15:
-                errs.append({"external_trade_id": r.get("id"), "error": repr(e)})
+            if len(errs) < 25:
+                errs.append({
+                    "id": r.get("id"),
+                    "enteredat": r.get("enteredat"),
+                    "exitedat": r.get("exitedat"),
+                    "error": str(e),
+                })
 
     return inserted, skipped, errs, samples
 
@@ -228,12 +240,26 @@ tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "G
 
 # ---- Upload ----
 with tab_upload:
+    st.subheader("Upload CSV")
     up = st.file_uploader("Drop your trade export", type=["csv"])
     if up:
         rows, dbg = _read_csv_to_rows(up.read())
+        st.caption("Original headers: " + ", ".join(dbg["original_headers"]))
+        st.caption("Normalized headers: " + ", ".join(dbg["normalized_headers"]))
+        st.caption("Canonical mapped pairs: " + ", ".join([f"{pair[1]} -> {pair[0]}" for pair in dbg["canonical_mapped_pairs"]]))
+        st.caption(f"Row count detected: {dbg['row_count']}")
         if rows:
             ins, skip, errs, samples = _upsert_trades_from_rows(rows)
-            st.success(f"Imported {ins} trades (skipped {skip}).")
+            if ins > 0:
+                st.success(f"Imported {ins} trades (skipped {skip}).")
+            else:
+                st.error(f"Imported {ins} trades (skipped {skip}).")
+            if samples:
+                with st.expander("Sample payloads attempted (first 5)"):
+                    st.json(samples)
+            if errs:
+                with st.expander("Errors (first 25)"):
+                    st.json(errs)
             st.cache_data.clear()
             st.rerun()
         else:
@@ -290,7 +316,7 @@ with tab_trades:
             suffixes=("", "_old"),
         )
 
-        # ✅ FIX: safely detect diffs, handle missing _old fields
+        # Save inline edits (r_multiple / review_status) safely
         diff_cols = ["r_multiple", "review_status"]
         to_update = []
         for _, r in edited_back.iterrows():
