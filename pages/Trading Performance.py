@@ -11,8 +11,7 @@ from supabase import create_client
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
 # ===== CONFIG =====
-# Your DB requires user_id NOT NULL -> enable scoping
-USE_USER_SCOPING = True
+USE_USER_SCOPING = True  # your DB requires user_id NOT NULL
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -129,6 +128,7 @@ def _insert_or_update_trade(payload: dict):
 def _upsert_trades_from_rows(rows):
     inserted = skipped = 0
     errs, samples = [], []
+    inserted_external_ids = []
 
     for r in rows:
         try:
@@ -145,12 +145,11 @@ def _upsert_trades_from_rows(rows):
 
             entry_iso = _to_iso_est(r.get("enteredat"))
             exit_iso  = _to_iso_est(r.get("exitedat"))
-
             if not entry_iso:
                 raise ValueError(f"Missing/Bad EnteredAt: {r.get('enteredat')}")
 
             payload = {
-                "user_id": USER_ID,                 # <- REQUIRED by your DB
+                "user_id": USER_ID,                 # <- REQUIRED
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
@@ -170,6 +169,7 @@ def _upsert_trades_from_rows(rows):
             status = _insert_or_update_trade(payload)
             if status in ("inserted", "updated"):
                 inserted += 1
+                inserted_external_ids.append(ext_id)
             else:
                 skipped += 1
 
@@ -183,16 +183,15 @@ def _upsert_trades_from_rows(rows):
                     "error": str(e),
                 })
 
-    return inserted, skipped, errs, samples
+    return inserted, skipped, errs, samples, inserted_external_ids
 
 # ---------- Load ----------
 @st.cache_data(ttl=60)
 def _load_trades(limit=4000):
-    sel = sb.table("tj_trades").select(
+    res = sb.table("tj_trades").select(
         "id,external_trade_id,symbol,side,entry_ts_est,exit_ts_est,entry_px,exit_px,qty,"
         "pnl_gross,fees,pnl_net,planned_risk,r_multiple,review_status"
-    ).eq("user_id", USER_ID)
-    res = sel.order("entry_ts_est", desc=True).limit(limit).execute()
+    ).eq("user_id", USER_ID).order("entry_ts_est", desc=True).limit(limit).execute()
     df = pd.DataFrame(res.data or [])
     if not df.empty:
         df["entry_ts_est"] = pd.to_datetime(df["entry_ts_est"])
@@ -221,6 +220,7 @@ def _save_tags(trade_ids, tags):
     sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag,user_id").execute()
 
 def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
+    """Create a group if name provided; then attach trade_ids."""
     if new_group_name:
         g = sb.table("tj_trade_groups").insert({"user_id": USER_ID, "name": new_group_name, "notes": notes}).execute().data[0]
         group_id = g["id"]
@@ -230,16 +230,18 @@ def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
     return group_id
 
 def _get_groups():
-    res = sb.table("tj_trade_groups").select("id,name,created_at").eq("user_id", USER_ID).order("created_at", desc=True).execute()
+    res = sb.table("tj_trade_groups").select("id,name,notes,created_at").eq("user_id", USER_ID).order("created_at", desc=True).execute()
     return res.data or []
 
 # ---------- UI ----------
 st.title("Trading Performance (EST)")
 tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "Groups", "Guardrails"])
 
-# Guard to avoid endless rerun loop after import
+# session_state helpers for post-upload flow
 if "just_imported" not in st.session_state:
     st.session_state.just_imported = False
+if "last_imported_external_ids" not in st.session_state:
+    st.session_state.last_imported_external_ids = []
 
 # ---- Upload ----
 with tab_upload:
@@ -252,7 +254,7 @@ with tab_upload:
         st.caption("Canonical mapped pairs: " + ", ".join([f"{pair[1]} -> {pair[0]}" for pair in dbg["canonical_mapped_pairs"]]))
         st.caption(f"Row count detected: {dbg['row_count']}")
         if rows:
-            ins, skip, errs, samples = _upsert_trades_from_rows(rows)
+            ins, skip, errs, samples, new_ids = _upsert_trades_from_rows(rows)
             if ins > 0:
                 st.success(f"Imported {ins} trades (skipped {skip}).")
             else:
@@ -264,14 +266,14 @@ with tab_upload:
                 with st.expander("Errors (first 25)"):
                     st.json(errs)
             st.cache_data.clear()
-            # avoid infinite refresh churn — mark once, then rerun
+            # record which external ids were just inserted/updated so we can preselect them
+            st.session_state.last_imported_external_ids = new_ids
             st.session_state.just_imported = True
-            st.rerun()
+            st.info("Switch to the Trades tab to tag/group these new trades — they’ll already be selected.")
         else:
             st.error("No rows found.")
     elif st.session_state.just_imported:
-        st.info("Upload complete. Switch tabs or upload again.")
-        # reset the flag if user clears/re-uploads
+        st.info("Upload complete. Switch to the Trades tab to tag/group the new trades.")
         if up is None:
             st.session_state.just_imported = False
 
@@ -282,9 +284,11 @@ with tab_trades:
     if df.empty:
         st.info("No trades yet.")
     else:
+        # Attach tags
         tagmap = _fetch_tags_for(df["id"].tolist())
         df["tags"] = df["id"].map(lambda i: ", ".join(sorted(tagmap.get(i, []))))
 
+        # Display-friendly names
         rename_map = {
             "external_trade_id": "Trade ID",
             "entry_ts_est": "Entry (EST)",
@@ -292,8 +296,13 @@ with tab_trades:
             "pnl_net": "PnL (Net)",
         }
 
+        # Insert selection column
         if "selected" not in df.columns:
             df.insert(0, "selected", False)
+
+        # Auto-preselect newly imported trades (by external_trade_id)
+        if st.session_state.last_imported_external_ids:
+            df.loc[df["external_trade_id"].isin(st.session_state.last_imported_external_ids), "selected"] = True
 
         df_display = df.rename(columns=rename_map)
 
@@ -313,11 +322,13 @@ with tab_trades:
                 "PnL (Net)": st.column_config.NumberColumn("PnL (Net)", step=0.01, format="%.2f"),
                 "r_multiple": st.column_config.NumberColumn("R Multiple", step=0.01),
                 "review_status": st.column_config.SelectboxColumn("Review Status", options=["unreviewed", "flagged", "reviewed"]),
+                "tags": st.column_config.TextColumn("Tags (read-only)"),
             },
             disabled=[c for c in view_cols if c not in ("selected", "r_multiple", "review_status")],
             num_rows="fixed",
         )
 
+        # Map back to original names and bring internal id for persistence
         edited_back = edited.rename(columns={v: k for k, v in rename_map.items()})
         edited_back = edited_back.merge(
             df[["external_trade_id", "id", "r_multiple", "review_status"]],
@@ -326,7 +337,7 @@ with tab_trades:
             suffixes=("", "_old"),
         )
 
-        # Save inline edits (r_multiple / review_status) safely
+        # Persist inline edits (r_multiple / review_status)
         diff_cols = ["r_multiple", "review_status"]
         to_update = []
         for _, r in edited_back.iterrows():
@@ -350,29 +361,64 @@ with tab_trades:
             st.cache_data.clear()
 
         st.markdown("---")
+        # Bulk actions: comments, tags, grouping
         selected_ids = edited_back.loc[edited_back.get("selected", False) == True, "id"].tolist()
         st.write(f"Selected: {len(selected_ids)}")
 
         with st.form("bulk_actions", clear_on_submit=True):
-            comment = st.text_area("Add comment")
+            comment = st.text_area("Add comment (markdown)")
             tag_str = st.text_input("Add tags (comma-separated)")
+
+            st.markdown("**Grouping**")
+            gmode = st.radio("Group action", ["None", "Add to existing", "Create new"], horizontal=True)
+
+            existing = None
+            new_group = None
+            notes = st.text_input("Group notes (optional)")
+
+            if gmode == "Add to existing":
+                groups = _get_groups()
+                if groups:
+                    labels = [f"{g['name']} ({g['id'][:6]})" for g in groups]
+                    idx = st.selectbox(
+                        "Pick group",
+                        list(range(len(labels))) if labels else [],
+                        format_func=lambda i: labels[i] if labels else None
+                    )
+                    if groups and len(groups) > 0:
+                        existing = groups[idx]["id"]
+                else:
+                    st.info("No groups yet — choose 'Create new'.")
+            elif gmode == "Create new":
+                new_group = st.text_input("New group name")
+
             do = st.form_submit_button("Apply")
+
         if do and selected_ids:
+            # comments/tags
             if comment:
                 _save_comments(selected_ids, comment)
             tags = [t.strip() for t in tag_str.split(",") if t.strip()]
             if tags:
                 _save_tags(selected_ids, tags)
+            # grouping
+            if gmode == "Add to existing" and existing:
+                _add_to_group(selected_ids, group_id=existing, notes=notes if notes else None)
+            elif gmode == "Create new" and (new_group or notes):
+                _add_to_group(selected_ids, new_group_name=(new_group or "Group"), notes=notes if notes else None)
+
             st.success("Saved")
             st.cache_data.clear()
+            # clear the auto-preselect list so the next visit is clean
+            st.session_state.last_imported_external_ids = []
             st.rerun()
 
-# ---- Groups ----
+# ---- Groups (read-only summaries) ----
 with tab_groups:
     st.subheader("Groups")
     groups = _get_groups()
     if not groups:
-        st.info("No groups yet.")
+        st.info("No groups yet. Create one from the Trades tab.")
     else:
         gmap = {f"{g['name']} ({g['id'][:6]})": g["id"] for g in groups}
         choice = st.selectbox("Choose a group", list(gmap.keys()))
@@ -384,8 +430,8 @@ with tab_groups:
             st.info("No trades in this group yet.")
         else:
             show_cols = ["external_trade_id","symbol","side","entry_ts_est","exit_ts_est","qty","pnl_net","r_multiple","review_status"]
-            st.dataframe(gdf[show_cols], use_container_width=True)
-            st.write(f"Group PnL (net): {gdf['pnl_net'].sum():,.2f}")
+            show_cols = [c for c in show_cols if c in gdf.columns]
+            st.dataframe(gdf[show_cols].sort_values("entry_ts_est"), use_container_width=True)
 
 # ---- Guardrails ----
 with tab_guards:
@@ -397,7 +443,7 @@ with tab_guards:
         df = df.sort_values("entry_ts_est")
         st.metric("Win rate", f"{(df['pnl_net'] > 0).mean():.0%}")
         st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(days=7))).sum()))
-        st.metric("Net P&L (sum)", f"{df['pnl_net'].sum():,.2f}")
+        st.metric("Net PnL (sum)", f"{df['pnl_net'].sum():,.2f}")
 
         hits = []
         ts = df["entry_ts_est"].tolist()
