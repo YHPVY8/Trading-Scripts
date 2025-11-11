@@ -3,7 +3,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-import io, csv
+import hashlib
 from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
@@ -14,17 +14,23 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
-# ---------- Helpers ----------
+# ---------- Utilities ----------
+def _clean_header(name: str) -> str:
+    """strip BOM/spaces, collapse inner spaces, lowercase"""
+    if name is None:
+        return ""
+    name = str(name).replace("\ufeff", "").strip()
+    name = " ".join(name.split())
+    return name.lower()
+
 def _to_iso_est(ts_str: str):
     """
-    Convert strings like 'MM/DD/YYYY HH:MM:SS -03:00' -> 'YYYY-MM-DD HH:MM:SS'
-    (no timezone) so they match Postgres TIMESTAMP WITHOUT TIME ZONE.
+    Convert 'MM/DD/YYYY HH:MM:SS -03:00' -> 'YYYY-MM-DD HH:MM:SS' (no tz)
     Returns None if unparsable.
     """
     if not ts_str:
         return None
     s = str(ts_str).strip()
-    # Strip trailing " +/-HH:MM" offset if present
     parts = s.rsplit(" ", 1)
     if len(parts) == 2 and len(parts[1]) == 6 and parts[1][3] == ":" and (parts[1][0] in "+-"):
         s = parts[0]
@@ -33,80 +39,179 @@ def _to_iso_est(ts_str: str):
         return None
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
+def _synth_id(row: dict) -> str:
+    """Deterministic synthesized Id if CSV lacks an Id."""
+    key = "|".join([
+        str(row.get("contractname", "")).strip().upper(),
+        str(row.get("enteredat", "")).strip(),
+        str(row.get("exitedat", "")).strip(),
+        str(row.get("entryprice", "")).strip(),
+        str(row.get("exitprice", "")).strip(),
+        str(row.get("size", "")).strip(),
+    ])
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+    return f"SYN-{digest}"
+
+def _as_float(x):
+    if x is None or x == "":
+        return None
+    try:
+        return float(str(x).replace(",", ""))
+    except Exception:
+        v = pd.to_numeric(x, errors="coerce")
+        return None if pd.isna(v) else float(v)
+
+# ---------- CSV -> canonical rows (via pandas) ----------
+def _read_csv_to_rows(uploaded_bytes: bytes):
+    """
+    Robust CSV reader using pandas:
+    - auto-detect delimiter (sep=None, engine='python')
+    - preserves all columns
+    - normalizes headers
+    Returns (rows, debug_info)
+    """
+    # Let pandas guess delimiter; handle BOM automatically
+    df = pd.read_csv(
+        pd.io.common.BytesIO(uploaded_bytes),
+        sep=None, engine="python", dtype=str, keep_default_na=False
+    )
+
+    # Normalize headers to canonical keys
+    original_headers = list(df.columns)
+    norm_headers = [_clean_header(h) for h in original_headers]
+    df.columns = norm_headers
+
+    # Alias map → canonical
+    alias_map = {
+        "id": "id",
+        "trade id": "id",
+        "tradeid": "id",
+        "external id": "id",
+
+        "contractname": "contractname",
+        "contract": "contractname",
+        "market": "contractname",
+        "symbol": "contractname",
+
+        "enteredat": "enteredat",
+        "entry time": "enteredat",
+        "entry": "enteredat",
+
+        "exitedat": "exitedat",
+        "exit time": "exitedat",
+        "exit": "exitedat",
+
+        "entryprice": "entryprice",
+        "entry price": "entryprice",
+        "exitprice": "exitprice",
+        "exit price": "exitprice",
+
+        "size": "size",
+        "quantity": "size",
+        "qty": "size",
+
+        "type": "type",
+        "side": "type",
+
+        "pnl": "pnl",
+        "p&l": "pnl",
+        "profit": "pnl",
+
+        "fees": "fees",
+        "fee": "fees",
+
+        "commissions": "commissions",
+        "commission": "commissions",
+
+        # Extras we ignore downstream but keep in debug
+        "tradeday": "tradeday",
+        "tradeduration": "tradeduration",
+    }
+
+    # Collapse aliases: take the first present alias for each canonical
+    canonical_cols = {}
+    for src, canon in alias_map.items():
+        if src in df.columns and canon not in canonical_cols:
+            canonical_cols[canon] = src
+
+    # Build a canonical dict row-by-row
+    rows = []
+    for _, r in df.iterrows():
+        row = {}
+        for canon, src in canonical_cols.items():
+            row[canon] = r.get(src, "")
+        rows.append(row)
+
+    debug = {
+        "original_headers": original_headers,
+        "normalized_headers": norm_headers,
+        "canonical_mapped": canonical_cols,
+        "row_count": len(rows),
+    }
+    return rows, debug
+
+# ---------- Upsert ----------
 def _upsert_trades_from_rows(rows):
     """
-    Upsert CSV rows into tj_trades using these headers:
-    Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Size, Type, PnL, Fees, Commissions
-    Returns (inserted, skipped, error_list, sample_payloads).
+    Upsert canonical rows into tj_trades.
+    Returns (inserted, skipped, errors, sample_payloads).
     """
-    inserted = 0
-    skipped = 0
+    inserted = skipped = 0
     errs = []
-    sample_payloads = []
+    samples = []
 
     for r in rows:
         try:
-            ext_id = r.get("Id")
+            ext_id = (r.get("id") or "").strip()
             if not ext_id:
-                skipped += 1
-                if len(errs) < 10:
-                    errs.append({"Id": None, "error": "Missing Id"})
-                continue
+                ext_id = _synth_id(r)  # safe fallback
 
-            # Side mapping supports Long/Short and Buy/Sell
-            t = (r.get("Type", "") or "").strip().lower()
+            t = (r.get("type", "") or "").strip().lower()
             if t in ("long", "buy", "b"):
                 side = "long"
             elif t in ("short", "sell", "s"):
                 side = "short"
             else:
-                side = None  # allow editing later
+                side = None
 
-            # Quantity = Size (fallbacks included)
-            qty_val = r.get("Size") or r.get("Quantity") or r.get("Qty")
-
-            # Symbol = ContractName (fallback to Symbol if present)
-            contract = (r.get("ContractName") or r.get("Symbol") or "").strip().upper()
+            qty_val = r.get("size")
+            contract = (r.get("contractname") or "").strip().upper()
             symbol = contract or None
 
-            # Fees = Fees + Commissions (either may be missing)
-            f1 = pd.to_numeric(r.get("Fees"), errors="coerce")
-            f2 = pd.to_numeric(r.get("Commissions"), errors="coerce")
-            fees_val = (0 if pd.isna(f1) else float(f1)) + (0 if pd.isna(f2) else float(f2))
+            f1 = _as_float(r.get("fees")) or 0.0
+            f2 = _as_float(r.get("commissions")) or 0.0
+            fees_val = float(f1) + float(f2)
 
             payload = {
                 "user_id": USER_ID,
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
-                "entry_ts_est": _to_iso_est(r.get("EnteredAt")),
-                "exit_ts_est":  _to_iso_est(r.get("ExitedAt")),
-                "entry_px":  float(r["EntryPrice"]) if r.get("EntryPrice")  not in (None, "") else None,
-                "exit_px":   float(r["ExitPrice"])  if r.get("ExitPrice")   not in (None, "") else None,
-                "qty":       float(qty_val)         if qty_val               not in (None, "") else None,
-                "pnl_gross": float(r["PnL"])        if r.get("PnL")         not in (None, "") else None,
+                "entry_ts_est": _to_iso_est(r.get("enteredat")),
+                "exit_ts_est":  _to_iso_est(r.get("exitedat")),
+                "entry_px":  _as_float(r.get("entryprice")),
+                "exit_px":   _as_float(r.get("exitprice")),
+                "qty":       _as_float(qty_val),
+                "pnl_gross": _as_float(r.get("pnl")),
                 "fees":      fees_val,
                 "source": "csv",
             }
 
-            # Keep a few examples for diagnostics
-            if len(sample_payloads) < 5:
-                sample_payloads.append(payload.copy())
+            if len(samples) < 5:
+                samples.append(payload.copy())
 
-            # Minimal sanity to avoid NOT NULL errors
             if not payload["entry_ts_est"] or not payload["exit_ts_est"]:
-                raise ValueError(f"Bad timestamps for Id={ext_id}: {r.get('EnteredAt')} / {r.get('ExitedAt')}")
+                raise ValueError(f"Bad timestamps: {r.get('enteredat')} / {r.get('exitedat')}")
 
-            # Actual upsert (raises on RLS/constraint/column issues)
             sb.table("tj_trades").upsert(payload, on_conflict="user_id,external_trade_id").execute()
             inserted += 1
 
         except Exception as e:
             skipped += 1
-            if len(errs) < 10:
-                errs.append({"Id": r.get("Id"), "error": repr(e)})
+            if len(errs) < 15:
+                errs.append({"external_trade_id": r.get("id"), "error": repr(e)})
 
-    return inserted, skipped, errs, sample_payloads
+    return inserted, skipped, errs, samples
 
 @st.cache_data(ttl=60)
 def _load_trades(limit=4000):
@@ -121,13 +226,13 @@ def _load_trades(limit=4000):
     return df
 
 def _save_comments(trade_ids, body):
-    if not body or not trade_ids: 
+    if not body or not trade_ids:
         return
     rows = [{"trade_id": tid, "user_id": USER_ID, "body": body} for tid in trade_ids]
     sb.table("tj_trade_comments").insert(rows).execute()
 
 def _save_tags(trade_ids, tags):
-    if not tags or not trade_ids: 
+    if not tags or not trade_ids:
         return
     rows = [{"trade_id": tid, "user_id": USER_ID, "tag": t} for tid in trade_ids for t in tags]
     sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag").execute()
@@ -155,59 +260,32 @@ tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "G
 # ---- Upload ----
 with tab_upload:
     st.subheader("Upload CSV")
-    up = st.file_uploader(
-        "Drop your trade export (Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Size, Type, PnL, Fees, Commissions, ...)",
-        type=["csv"]
-    )
-
+    up = st.file_uploader("Drop your trade export (tabs/commas OK; headers auto-detected)", type=["csv"])
     if up:
-        content = up.read().decode("utf-8", errors="ignore")
-        rows = list(csv.DictReader(io.StringIO(content)))
+        rows, dbg = _read_csv_to_rows(up.read())
 
-        # Show headers we detected, helps confirm mapping instantly
-        if rows:
-            st.caption("Detected columns: " + ", ".join(rows[0].keys()))
+        # Diagnostics: what we actually saw
+        st.caption("Original headers: " + ", ".join(dbg["original_headers"]))
+        st.caption("Normalized headers: " + ", ".join(dbg["normalized_headers"]))
+        st.caption("Canonical mapping: " + ", ".join([f"{v}→{k}" for k, v in dbg["canonical_mapped"].items()]))
+        st.caption(f"Row count detected: {dbg['row_count']}")
 
-        ins, skip, errs, samples = _upsert_trades_from_rows(rows)
-
-        # Report counts
-        if ins > 0:
-            st.success(f"Imported {ins} rows (skipped {skip}).")
-            st.cache_data.clear()
+        if not rows:
+            st.error("No data rows found after parsing.")
         else:
-            st.error(f"Imported {ins} rows (skipped {skip}).")
-
-        # Always show diagnostics if anything failed
-        if samples:
-            with st.expander("Sample payloads attempted (first 5)"):
-                st.json(samples)
-        if errs:
-            with st.expander("Sample errors (first 10)"):
-                st.json(errs)
-
-        # Only rerun if we actually inserted something (avoids hiding error details)
-        if ins > 0:
-            st.rerun()
-
-    # Optional: quick sanity probe to test DB insert path
-    with st.expander("Insert sanity probe (optional)"):
-        if st.button("Run insert probe"):
-            probe_id = "PROBE-" + pd.Timestamp.utcnow().strftime("%Y%m%d%H%M%S")
-            probe_payload = {
-                "user_id": USER_ID,
-                "external_trade_id": probe_id,
-                "symbol": "TEST",
-                "side": "long",
-                "entry_ts_est": (datetime.now()).strftime("%Y-%m-%d %H:%M:%S"),
-                "exit_ts_est":  (datetime.now() + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S"),
-                "entry_px": 1.0, "exit_px": 1.1, "qty": 1, "pnl_gross": 0.1, "fees": 0.0, "source": "probe",
-            }
-            try:
-                sb.table("tj_trades").upsert(probe_payload, on_conflict="user_id,external_trade_id").execute()
-                st.success("Insert probe succeeded (cleaning up).")
-                sb.table("tj_trades").delete().eq("user_id", USER_ID).eq("external_trade_id", probe_id).execute()
-            except Exception as e:
-                st.error(f"Insert probe failed: {repr(e)}")
+            ins, skip, errs, samples = _upsert_trades_from_rows(rows)
+            if ins > 0:
+                st.success(f"Imported {ins} rows (skipped {skip}).")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(f"Imported {ins} rows (skipped {skip}).")
+                if samples:
+                    with st.expander("Sample payloads attempted (first 5)"):
+                        st.json(samples)
+                if errs:
+                    with st.expander("Sample errors (first 15)"):
+                        st.json(errs)
 
 # ---- Trades ----
 with tab_trades:
@@ -217,18 +295,13 @@ with tab_trades:
         st.info("No trades yet — upload a CSV in the Upload tab.")
     else:
         orig = df.copy()
-
-        # Selection column for bulk actions
         if "selected" not in df.columns:
             df.insert(0, "selected", False)
 
-        # Pretty labels for timestamps
         rename_map = {"entry_ts_est": "Entry (EST)", "exit_ts_est": "Exit (EST)"}
         df_display = df.rename(columns=rename_map)
 
-        # Editable columns in the grid
         editable_cols = ["selected", "planned_risk", "r_multiple", "review_status"]
-
         edited = st.data_editor(
             df_display,
             use_container_width=True,
@@ -244,11 +317,8 @@ with tab_trades:
             disabled=[c for c in df_display.columns if c not in editable_cols],
             num_rows="fixed",
         )
-
-        # Back to original column names
         edited = edited.rename(columns={v: k for k, v in rename_map.items()})
 
-        # ---------- Persist inline edits (planned_risk / r_multiple / review_status) ----------
         diff_cols = ["planned_risk", "r_multiple", "review_status"]
         to_update = []
         merged = edited.merge(orig[["id"] + diff_cols], on="id", suffixes=("", "_old"))
@@ -271,9 +341,7 @@ with tab_trades:
             st.toast(f"Saved {len(to_update)} inline edit(s)")
             st.cache_data.clear()
 
-        # ---------- Bulk actions (comments, tags, groups) ----------
         selected_ids = edited.loc[edited["selected"] == True, "id"].tolist()
-
         with st.form("bulk_actions_native", clear_on_submit=True):
             st.write(f"Selected: {len(selected_ids)}")
             comment = st.text_area("Add comment (markdown)")
@@ -326,7 +394,6 @@ with tab_groups:
         gmap = {f"{g['name']} ({g['id'][:6]})": g["id"] for g in groups}
         choice = st.selectbox("Choose a group", list(gmap.keys()))
         gid = gmap[choice]
-        # join: members -> trades
         mem = sb.table("tj_trade_group_members").select("trade_id, tj_trades(*)").eq("group_id", gid).execute().data
         rows = [m["tj_trades"] for m in mem if m.get("tj_trades")]
         gdf = pd.DataFrame(rows or [])
@@ -346,47 +413,4 @@ with tab_guards:
     else:
         df = df.sort_values("entry_ts_est")
         st.metric("Win rate", f"{(df['pnl_net']>0).mean():.0%}")
-        st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(days=7))).sum()))
-        st.metric("Net P&L (sum)", f"{df['pnl_net'].sum():,.2f}")
-
-        # Simple detectors
-        hits = []
-
-        # 1) Max trades per 60 min > 6
-        ts = df["entry_ts_est"].tolist()
-        i = j = 0
-        while i < len(ts):
-            while j < len(ts) and (ts[j] - ts[i]) <= timedelta(minutes=60):
-                j += 1
-            count = j - i
-            if count > 6:
-                hits.append({"rule":"trades_per_60m>6","start":ts[i],"end":ts[j-1],"count":count})
-            i += 1
-
-        # 2) Max consecutive losses > 3
-        streak = 0; start = None
-        for _, r in df.iterrows():
-            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
-            if pnl < 0:
-                if streak == 0: start = r["entry_ts_est"]
-                streak += 1
-                if streak > 3:
-                    hits.append({"rule":"consecutive_losses>3","start":start,"end":r["exit_ts_est"],"count":streak})
-            else:
-                streak = 0; start = None
-
-        # 3) Re-entry under 5 minutes after a loss
-        last_loss_exit = None
-        for _, r in df.sort_values("exit_ts_est").iterrows():
-            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
-            if pnl < 0:
-                last_loss_exit = r["exit_ts_est"]
-            else:
-                if last_loss_exit is not None and (r["entry_ts_est"] - last_loss_exit).total_seconds() <= 5*60:
-                    hits.append({"rule":"reentry_under_5m_after_loss","loss_exit":last_loss_exit,"reentry":r["entry_ts_est"]})
-                last_loss_exit = None
-
-        if hits:
-            st.dataframe(pd.DataFrame(hits), use_container_width=True)
-        else:
-            st.success("No guardrail hits.")
+        st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(day
