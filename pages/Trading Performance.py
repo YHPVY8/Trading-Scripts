@@ -219,10 +219,41 @@ def _save_comments(trade_ids, body):
     sb.table("tj_trade_comments").insert(rows).execute()
 
 def _save_tags(trade_ids, tags):
+    """Robust tag save:
+       1) Try upsert on (trade_id,tag,user_id)
+       2) Fallback to (trade_id,tag)
+       3) Fallback to manual dedupe: fetch existing then insert only missing
+    """
     if not tags or not trade_ids:
         return
+
     rows = [{"trade_id": tid, "user_id": USER_ID, "tag": t} for tid in trade_ids for t in tags]
-    sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag,user_id").execute()
+    # Attempt #1
+    try:
+        sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag,user_id").execute()
+        st.toast("Tags saved (conflict: trade_id,tag,user_id)")
+        return
+    except Exception:
+        pass
+    # Attempt #2
+    try:
+        sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag").execute()
+        st.toast("Tags saved (conflict: trade_id,tag)")
+        return
+    except Exception:
+        pass
+    # Attempt #3: manual dedupe
+    try:
+        existing = sb.table("tj_trade_tags").select("trade_id,tag").in_("trade_id", trade_ids).eq("user_id", USER_ID).execute().data or []
+        existing_set = {(e["trade_id"], e["tag"]) for e in existing}
+        to_insert = [r for r in rows if (r["trade_id"], r["tag"]) not in existing_set]
+        if to_insert:
+            sb.table("tj_trade_tags").insert(to_insert).execute()
+            st.toast(f"Tags saved (manual insert {len(to_insert)})")
+        else:
+            st.toast("Tags already present")
+    except Exception as e:
+        st.error(f"Saving tags failed: {e}")
 
 def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
     """Create a group if name provided; then attach trade_ids."""
@@ -231,7 +262,13 @@ def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
         group_id = g["id"]
     if group_id and trade_ids:
         rows = [{"group_id": group_id, "trade_id": tid} for tid in trade_ids]
-        sb.table("tj_trade_group_members").upsert(rows, on_conflict="group_id,trade_id").execute()
+        # also robust upsert in case unique index differs
+        try:
+            sb.table("tj_trade_group_members").upsert(rows, on_conflict="group_id,trade_id").execute()
+        except Exception:
+            # fallback: delete duplicates then insert
+            sb.table("tj_trade_group_members").delete().in_("trade_id", trade_ids).eq("group_id", group_id).execute()
+            sb.table("tj_trade_group_members").insert(rows).execute()
     return group_id
 
 def _remove_from_groups(trade_ids):
@@ -360,7 +397,7 @@ if "just_imported" not in st.session_state:
 if "last_imported_external_ids" not in st.session_state:
     st.session_state.last_imported_external_ids = []
 if "auto_select_after_upload" not in st.session_state:
-    st.session_state.auto_select_after_upload = False  # default OFF per your request
+    st.session_state.auto_select_after_upload = False  # default OFF
 
 # ---- Upload ----
 with tab_upload:
@@ -421,7 +458,7 @@ with tab_trades:
         if "selected" not in df.columns:
             df.insert(0, "selected", False)
 
-        # NEW: Only preselect after upload if toggle is ON
+        # Only preselect after upload if toggle is ON
         if st.session_state.auto_select_after_upload and st.session_state.last_imported_external_ids:
             df.loc[df["external_trade_id"].isin(st.session_state.last_imported_external_ids), "selected"] = True
 
@@ -454,7 +491,7 @@ with tab_trades:
         # Map back to original names and bring internal id for persistence
         edited_back = edited.rename(columns={v: k for k, v in rename_map.items()})
         edited_back = edited_back.merge(
-            df[["external_trade_id", "id", "r_multiple", "review_status"]],
+            df[{"external_trade_id", "id", "r_multiple", "review_status"}],
             on="external_trade_id",
             how="left",
             suffixes=("", "_old"),
@@ -513,7 +550,6 @@ with tab_trades:
                 else:
                     st.info("No groups yet — choose 'Create new (auto-name)'.")
             elif gmode == "Create new (auto-name)":
-                # show the next suggested name; allow override if you want later
                 suggested = _next_group_name()
                 st.caption(f"Suggested name: **{suggested}**")
                 new_group_name = suggested  # use suggested automatically
@@ -536,7 +572,6 @@ with tab_trades:
 
             st.success("Saved")
             st.cache_data.clear()
-            # do NOT force-select next time
             st.session_state.last_imported_external_ids = []
             st.rerun()
 
