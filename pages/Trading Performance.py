@@ -1,10 +1,12 @@
 # pages/Trading Performance.py
 #!/usr/bin/env python3
-import streamlit as st
-import pandas as pd
-from supabase import create_client
+import io
 import hashlib
 from datetime import datetime, timedelta
+
+import pandas as pd
+import streamlit as st
+from supabase import create_client
 
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
@@ -16,16 +18,16 @@ USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 # ---------- Utilities ----------
 def _clean_header(name: str) -> str:
-    """strip BOM/spaces, collapse inner spaces, lowercase"""
+    """Strip BOM/spaces, collapse inner spaces, lowercase."""
     if name is None:
         return ""
-    name = str(name).replace("\ufeff", "").strip()
-    name = " ".join(name.split())
-    return name.lower()
+    s = str(name).replace("\ufeff", "").strip()
+    s = " ".join(s.split())
+    return s.lower()
 
 def _to_iso_est(ts_str: str):
     """
-    Convert 'MM/DD/YYYY HH:MM:SS -03:00' -> 'YYYY-MM-DD HH:MM:SS' (no tz)
+    Convert 'MM/DD/YYYY HH:MM:SS -03:00' -> 'YYYY-MM-DD HH:MM:SS' (no tz).
     Returns None if unparsable.
     """
     if not ts_str:
@@ -55,10 +57,11 @@ def _synth_id(row: dict) -> str:
 def _as_float(x):
     if x is None or x == "":
         return None
+    x_str = str(x).replace(",", "").strip()
     try:
-        return float(str(x).replace(",", ""))
+        return float(x_str)
     except Exception:
-        v = pd.to_numeric(x, errors="coerce")
+        v = pd.to_numeric(x_str, errors="coerce")
         return None if pd.isna(v) else float(v)
 
 # ---------- CSV -> canonical rows (via pandas) ----------
@@ -68,20 +71,22 @@ def _read_csv_to_rows(uploaded_bytes: bytes):
     - auto-detect delimiter (sep=None, engine='python')
     - preserves all columns
     - normalizes headers
-    Returns (rows, debug_info)
+    Returns (rows, debug_info).
     """
-    # Let pandas guess delimiter; handle BOM automatically
     df = pd.read_csv(
-        pd.io.common.BytesIO(uploaded_bytes),
-        sep=None, engine="python", dtype=str, keep_default_na=False
+        io.BytesIO(uploaded_bytes),
+        sep=None,
+        engine="python",
+        dtype=str,
+        keep_default_na=False,
     )
 
-    # Normalize headers to canonical keys
     original_headers = list(df.columns)
     norm_headers = [_clean_header(h) for h in original_headers]
     df.columns = norm_headers
 
-    # Alias map → canonical
+    # Alias map -> canonical
+    # Canonical keys we store: id, contractname, enteredat, exitedat, entryprice, exitprice, size, type, pnl, fees, commissions
     alias_map = {
         "id": "id",
         "trade id": "id",
@@ -123,18 +128,18 @@ def _read_csv_to_rows(uploaded_bytes: bytes):
         "commissions": "commissions",
         "commission": "commissions",
 
-        # Extras we ignore downstream but keep in debug
+        # Extras (not required)
         "tradeday": "tradeday",
         "tradeduration": "tradeduration",
     }
 
-    # Collapse aliases: take the first present alias for each canonical
+    # Build canonical column mapping: choose the first alias present for each canonical key
     canonical_cols = {}
     for src, canon in alias_map.items():
         if src in df.columns and canon not in canonical_cols:
             canonical_cols[canon] = src
 
-    # Build a canonical dict row-by-row
+    # Build rows as canonical dicts
     rows = []
     for _, r in df.iterrows():
         row = {}
@@ -145,7 +150,7 @@ def _read_csv_to_rows(uploaded_bytes: bytes):
     debug = {
         "original_headers": original_headers,
         "normalized_headers": norm_headers,
-        "canonical_mapped": canonical_cols,
+        "canonical_mapped_pairs": sorted([(k, v) for k, v in canonical_cols.items()]),
         "row_count": len(rows),
     }
     return rows, debug
@@ -156,7 +161,8 @@ def _upsert_trades_from_rows(rows):
     Upsert canonical rows into tj_trades.
     Returns (inserted, skipped, errors, sample_payloads).
     """
-    inserted = skipped = 0
+    inserted = 0
+    skipped = 0
     errs = []
     samples = []
 
@@ -164,7 +170,7 @@ def _upsert_trades_from_rows(rows):
         try:
             ext_id = (r.get("id") or "").strip()
             if not ext_id:
-                ext_id = _synth_id(r)  # safe fallback
+                ext_id = _synth_id(r)
 
             t = (r.get("type", "") or "").strip().lower()
             if t in ("long", "buy", "b"):
@@ -198,7 +204,7 @@ def _upsert_trades_from_rows(rows):
             }
 
             if len(samples) < 5:
-                samples.append(payload.copy())
+                samples.append(dict(payload))
 
             if not payload["entry_ts_est"] or not payload["exit_ts_est"]:
                 raise ValueError(f"Bad timestamps: {r.get('enteredat')} / {r.get('exitedat')}")
@@ -260,14 +266,14 @@ tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "G
 # ---- Upload ----
 with tab_upload:
     st.subheader("Upload CSV")
-    up = st.file_uploader("Drop your trade export (tabs/commas OK; headers auto-detected)", type=["csv"])
+    up = st.file_uploader("Drop your trade export (tabs or commas are OK; headers auto-detected)", type=["csv"])
     if up:
         rows, dbg = _read_csv_to_rows(up.read())
 
-        # Diagnostics: what we actually saw
+        # Diagnostics
         st.caption("Original headers: " + ", ".join(dbg["original_headers"]))
         st.caption("Normalized headers: " + ", ".join(dbg["normalized_headers"]))
-        st.caption("Canonical mapping: " + ", ".join([f"{v}→{k}" for k, v in dbg["canonical_mapped"].items()]))
+        st.caption("Canonical mapped pairs: " + ", ".join([f"{pair[1]} -> {pair[0]}" for pair in dbg["canonical_mapped_pairs"]]))
         st.caption(f"Row count detected: {dbg['row_count']}")
 
         if not rows:
@@ -307,7 +313,7 @@ with tab_trades:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "selected": st.column_config.CheckboxColumn("✓", help="Select for bulk actions"),
+                "selected": st.column_config.CheckboxColumn("Select", help="Select for bulk actions"),
                 "planned_risk": st.column_config.NumberColumn("Planned Risk", step=0.01),
                 "r_multiple": st.column_config.NumberColumn("R Multiple", step=0.01),
                 "review_status": st.column_config.SelectboxColumn(
@@ -413,4 +419,49 @@ with tab_guards:
     else:
         df = df.sort_values("entry_ts_est")
         st.metric("Win rate", f"{(df['pnl_net']>0).mean():.0%}")
-        st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(day
+        st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(days=7))).sum()))
+        st.metric("Net PnL (sum)", f"{df['pnl_net'].sum():,.2f}")
+
+        hits = []
+
+        # 1) Max trades per 60 min > 6
+        ts = df["entry_ts_est"].tolist()
+        i = j = 0
+        while i < len(ts):
+            while j < len(ts) and (ts[j] - ts[i]) <= timedelta(minutes=60):
+                j += 1
+            count = j - i
+            if count > 6:
+                hits.append({"rule": "trades_per_60m_gt_6", "start": ts[i], "end": ts[j-1], "count": count})
+            i += 1
+
+        # 2) Max consecutive losses > 3
+        streak = 0
+        start = None
+        for _, r in df.iterrows():
+            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
+            if pnl < 0:
+                if streak == 0:
+                    start = r["entry_ts_est"]
+                streak += 1
+                if streak > 3:
+                    hits.append({"rule": "consecutive_losses_gt_3", "start": start, "end": r["exit_ts_est"], "count": streak})
+            else:
+                streak = 0
+                start = None
+
+        # 3) Re-entry under 5 minutes after a loss
+        last_loss_exit = None
+        for _, r in df.sort_values("exit_ts_est").iterrows():
+            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
+            if pnl < 0:
+                last_loss_exit = r["exit_ts_est"]
+            else:
+                if last_loss_exit is not None and (r["entry_ts_est"] - last_loss_exit).total_seconds() <= 5 * 60:
+                    hits.append({"rule": "reentry_under_5m_after_loss", "loss_exit": last_loss_exit, "reentry": r["entry_ts_est"]})
+                last_loss_exit = None
+
+        if hits:
+            st.dataframe(pd.DataFrame(hits), use_container_width=True)
+        else:
+            st.success("No guardrail hits.")
