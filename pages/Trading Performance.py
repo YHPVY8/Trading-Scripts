@@ -12,7 +12,7 @@ from supabase import create_client
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
 # ===== CONFIG =====
-USE_USER_SCOPING = True  # your DB uses NOT NULL user_id
+USE_USER_SCOPING = True  # your DB requires user_id NOT NULL
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -152,12 +152,12 @@ def _upsert_trades_from_rows(rows):
                 raise ValueError(f"Missing/Bad EnteredAt: {r.get('enteredat')}")
 
             payload = {
-                "user_id": USER_ID,                 # <- REQUIRED
+                "user_id": USER_ID,                 # <- REQUIRED (tj_trades.user_id NOT NULL)
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
                 "entry_ts_est": entry_iso,
-                "exit_ts_est":  exit_iso,           # may be None
+                "exit_ts_est":  exit_iso,           # may be None for open trades
                 "entry_px":  _as_float(r.get("entryprice")),
                 "exit_px":   _as_float(r.get("exitprice")),
                 "qty":       _as_float(qty_val),
@@ -224,61 +224,46 @@ def _save_tags(trade_ids, tags):
     rows = [{"trade_id": tid, "user_id": USER_ID, "tag": t} for tid in trade_ids for t in tags]
     sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag,user_id").execute()
 
-def _next_group_name():
-    """Auto-name groups: 'Group N' with N = 1 + max existing numeric suffix for this user."""
-    rows = sb.table("tj_trade_groups").select("name").eq("user_id", USER_ID).execute().data or []
-    max_n = 0
-    for r in rows:
-        name = (r.get("name") or "").strip()
-        m = re.match(r"(?i)group\s+(\d+)$", name)
-        if m:
-            try:
-                max_n = max(max_n, int(m.group(1)))
-            except Exception:
-                pass
-    return f"Group {max_n + 1}"
-
 def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
-    """Create a group if name is blank -> auto name; then attach trade_ids."""
-    if new_group_name is not None and new_group_name.strip() == "":
-        new_group_name = None
-    if new_group_name is None and group_id is None:
-        new_group_name = _next_group_name()
-
+    """Create a group if name provided; then attach trade_ids."""
     if new_group_name:
-        g = sb.table("tj_trade_groups").insert(
-            {"user_id": USER_ID, "name": new_group_name, "notes": notes}
-        ).execute().data[0]
+        g = sb.table("tj_trade_groups").insert({"user_id": USER_ID, "name": new_group_name, "notes": notes}).execute().data[0]
         group_id = g["id"]
-
     if group_id and trade_ids:
         rows = [{"group_id": group_id, "trade_id": tid} for tid in trade_ids]
         sb.table("tj_trade_group_members").upsert(rows, on_conflict="group_id,trade_id").execute()
     return group_id
 
-def _remove_from_group(trade_ids, group_id=None, remove_from_all=False):
-    """Un-group trades: either from a specific group, or from all groups the trades belong to."""
+def _remove_from_groups(trade_ids):
+    """Ungroup: remove selected trades from any groups they belong to."""
     if not trade_ids:
         return
-    if remove_from_all:
-        # delete any membership rows for these trades (any group)
-        sb.table("tj_trade_group_members").delete().in_("trade_id", trade_ids).execute()
-    elif group_id:
-        # delete memberships only for selected group
-        # (no 'and_' API in supabase-py for composite keys; do two filters)
-        # We need to fetch memberships and delete by primary key if available,
-        # but many setups allow delete with both filters chained:
-        sb.table("tj_trade_group_members").delete().eq("group_id", group_id).in_("trade_id", trade_ids).execute()
+    sb.table("tj_trade_group_members").delete().in_("trade_id", trade_ids).execute()
 
 def _get_groups():
     res = sb.table("tj_trade_groups").select("id,name,notes,created_at").eq("user_id", USER_ID).order("created_at", desc=True).execute()
     return res.data or []
 
+def _next_group_name():
+    """Auto-increment group name like 'Group 1', 'Group 2', ..."""
+    groups = _get_groups()
+    nums = []
+    for g in groups:
+        name = (g.get("name") or "").strip()
+        m = re.search(r"(\d+)$", name)
+        if m:
+            try:
+                nums.append(int(m.group(1)))
+            except Exception:
+                pass
+    n = (max(nums) + 1) if nums else 1
+    return f"Group {n}"
+
 # ===== Group collapsed helpers =====
 def _fetch_all_groups_with_members():
     """
     Returns (groups, members_df).
-    groups: list {id,name,notes,created_at}
+    groups: list of group rows {id,name,notes,created_at}
     members_df: DataFrame of joined group members with trade columns for this USER_ID
     """
     groups = sb.table("tj_trade_groups")\
@@ -329,57 +314,59 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
         # VWAP Entry
         ok_e = gdf["entry_px"].notna()
         w_entry = qty.where(ok_e, 0)
-        vwap_entry = (gdf["entry_px"].where(ok_e, 0) * qty).sum() / (w_entry.sum() if w_entry.sum() else float("nan"))
-        vwap_entry = None if pd.isna(vwap_entry) else float(vwap_entry)
+        denom_e = w_entry.sum()
+        vwap_entry = None
+        if denom_e and denom_e != 0:
+            vwap_entry = float((gdf["entry_px"].where(ok_e, 0) * qty).sum() / denom_e)
 
         # VWAP Exit
         ok_x = gdf["exit_px"].notna()
         w_exit = qty.where(ok_x, 0)
-        vwap_exit = (gdf["exit_px"].where(ok_x, 0) * qty).sum() / (w_exit.sum() if w_exit.sum() else float("nan"))
-        vwap_exit = None if pd.isna(vwap_exit) else float(vwap_exit)
+        denom_x = w_exit.sum()
+        vwap_exit = None
+        if denom_x and denom_x != 0:
+            vwap_exit = float((gdf["exit_px"].where(ok_x, 0) * qty).sum() / denom_x)
 
         first_entry = gdf["entry_ts_est"].min()
         last_exit   = gdf["exit_ts_est"].max()
-        total_qty   = gdf["qty"].fillna(0).sum()
+        total_qty   = float(gdf["qty"].fillna(0).sum())
 
         # Net PnL
-        if "pnl_net" in gdf and gdf["pnl_net"].notna().any():
-            pnl_sum = gdf["pnl_net"].fillna(0).sum()
-        else:
-            pnl_sum = gdf["pnl_gross"].fillna(0).sum() - gdf["fees"].fillna(0).sum()
+        pnl_sum = float((gdf["pnl_net"].fillna(0) if "pnl_net" in gdf else 0).sum())
+        if pnl_sum == 0 and ("pnl_gross" in gdf or "fees" in gdf):
+            pnl_sum = float(gdf["pnl_gross"].fillna(0).sum() - gdf["fees"].fillna(0).sum())
 
         out.append({
             "group_id": gid,
             "first_entry": first_entry,
             "last_exit": last_exit,
             "legs": int(legs),
-            "total_qty": float(total_qty),
+            "total_qty": total_qty,
             "vwap_entry": vwap_entry,
             "vwap_exit": vwap_exit,
             "symbol": _mode(gdf["symbol"]) if "symbol" in gdf else None,
             "side": _mode(gdf["side"]) if "side" in gdf else None,
-            "pnl_net_sum": float(pnl_sum),
+            "pnl_net_sum": pnl_sum,
         })
     return pd.DataFrame(out)
-
-def _extract_hashtags(notes: str):
-    if not notes:
-        return []
-    return re.findall(r"#(\w+)", notes)
 
 # ---------- UI ----------
 st.title("Trading Performance (EST)")
 tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "Groups", "Guardrails"])
 
-# session_state: we still track last import list, but we will NOT auto-select
+# Session state
+if "just_imported" not in st.session_state:
+    st.session_state.just_imported = False
 if "last_imported_external_ids" not in st.session_state:
     st.session_state.last_imported_external_ids = []
+if "auto_select_after_upload" not in st.session_state:
+    st.session_state.auto_select_after_upload = False  # default OFF per your request
 
 # ---- Upload ----
 with tab_upload:
     st.subheader("Upload CSV")
     up = st.file_uploader("Drop your trade export", type=["csv"])
-    if up:
+    if up and not st.session_state.just_imported:
         rows, dbg = _read_csv_to_rows(up.read())
         st.caption("Original headers: " + ", ".join(dbg["original_headers"]))
         st.caption("Normalized headers: " + ", ".join(dbg["normalized_headers"]))
@@ -398,9 +385,15 @@ with tab_upload:
                 with st.expander("Errors (first 25)"):
                     st.json(errs)
             st.cache_data.clear()
-            st.session_state.last_imported_external_ids = new_ext_ids  # informative only
+            st.session_state.last_imported_external_ids = new_ext_ids
+            st.session_state.just_imported = True
+            st.info("Switch to the Trades tab to tag/group the new trades.")
         else:
             st.error("No rows found.")
+    elif st.session_state.just_imported:
+        st.info("Upload complete. Switch to the Trades tab to tag/group the new trades.")
+        if up is None:
+            st.session_state.just_imported = False
 
 # ---- Trades ----
 with tab_trades:
@@ -409,10 +402,14 @@ with tab_trades:
     if df.empty:
         st.info("No trades yet.")
     else:
+        # Toggle whether to auto-select newly uploaded rows
+        st.checkbox("Auto-select newly imported trades", key="auto_select_after_upload")
+
         # Attach tags
         tagmap = _fetch_tags_for(df["id"].tolist())
         df["tags"] = df["id"].map(lambda i: ", ".join(sorted(tagmap.get(i, []))))
 
+        # Display-friendly names
         rename_map = {
             "external_trade_id": "Trade ID",
             "entry_ts_est": "Entry (EST)",
@@ -420,9 +417,13 @@ with tab_trades:
             "pnl_net": "PnL (Net)",
         }
 
-        # Checkbox column (default False always)
+        # Insert selection column
         if "selected" not in df.columns:
             df.insert(0, "selected", False)
+
+        # NEW: Only preselect after upload if toggle is ON
+        if st.session_state.auto_select_after_upload and st.session_state.last_imported_external_ids:
+            df.loc[df["external_trade_id"].isin(st.session_state.last_imported_external_ids), "selected"] = True
 
         df_display = df.rename(columns=rename_map)
 
@@ -450,7 +451,7 @@ with tab_trades:
             num_rows="fixed",
         )
 
-        # Map back to original and bring internal id for persistence
+        # Map back to original names and bring internal id for persistence
         edited_back = edited.rename(columns={v: k for k, v in rename_map.items()})
         edited_back = edited_back.merge(
             df[["external_trade_id", "id", "r_multiple", "review_status"]],
@@ -483,7 +484,7 @@ with tab_trades:
             st.cache_data.clear()
 
         st.markdown("---")
-        # Bulk actions: comments, tags, grouping & UN-grouping
+        # Bulk actions: comments, tags, grouping, ungroup
         selected_ids = edited_back.loc[edited_back.get("selected", False) == True, "id"].tolist()
         st.write(f"Selected: {len(selected_ids)}")
 
@@ -492,18 +493,13 @@ with tab_trades:
             tag_str = st.text_input("Add tags (comma-separated)")
 
             st.markdown("**Grouping**")
-            gmode = st.radio(
-                "Group action",
-                ["None", "Add to existing", "Create new (or auto)", "Remove from existing", "Remove from all groups"],
-                horizontal=False
-            )
+            gmode = st.radio("Action", ["None", "Add to existing", "Create new (auto-name)", "Remove from group(s)"], horizontal=False)
 
             existing = None
-            new_group = None
-            notes = st.text_input("Group notes (optional, supports #hashtags e.g. #ON-Continuation #BaseHit)")
+            new_group_name = None
+            notes = st.text_input("Group notes (optional)")
 
-            # Inputs by mode
-            if gmode == "Add to existing" or gmode == "Remove from existing":
+            if gmode == "Add to existing":
                 groups = _get_groups()
                 if groups:
                     labels = [f"{g['name']} ({g['id'][:6]})" for g in groups]
@@ -515,38 +511,36 @@ with tab_trades:
                     if groups and len(groups) > 0:
                         existing = groups[idx]["id"]
                 else:
-                    st.info("No groups yet — choose 'Create new (or auto)'.")
-            elif gmode == "Create new (or auto)":
-                new_group = st.text_input("New group name (leave blank to auto-name)")
+                    st.info("No groups yet — choose 'Create new (auto-name)'.")
+            elif gmode == "Create new (auto-name)":
+                # show the next suggested name; allow override if you want later
+                suggested = _next_group_name()
+                st.caption(f"Suggested name: **{suggested}**")
+                new_group_name = suggested  # use suggested automatically
 
             do = st.form_submit_button("Apply")
 
         if do and selected_ids:
-            # comments/tags
             if comment:
                 _save_comments(selected_ids, comment)
             tags = [t.strip() for t in tag_str.split(",") if t.strip()]
             if tags:
                 _save_tags(selected_ids, tags)
 
-            # grouping actions
             if gmode == "Add to existing" and existing:
                 _add_to_group(selected_ids, group_id=existing, notes=notes if notes else None)
-                st.success("Added to group")
-            elif gmode == "Create new (or auto)":
-                gid = _add_to_group(selected_ids, new_group_name=(new_group if new_group is not None else None), notes=notes if notes else None)
-                st.success(f"Created/used group: {gid[:6] if gid else ''}")
-            elif gmode == "Remove from existing" and existing:
-                _remove_from_group(selected_ids, group_id=existing, remove_from_all=False)
-                st.success("Removed from selected group")
-            elif gmode == "Remove from all groups":
-                _remove_from_group(selected_ids, group_id=None, remove_from_all=True)
-                st.success("Removed from all groups")
+            elif gmode == "Create new (auto-name)":
+                _add_to_group(selected_ids, new_group_name=new_group_name, notes=notes if notes else None)
+            elif gmode == "Remove from group(s)":
+                _remove_from_groups(selected_ids)
 
+            st.success("Saved")
             st.cache_data.clear()
+            # do NOT force-select next time
+            st.session_state.last_imported_external_ids = []
             st.rerun()
 
-# ---- Groups (collapsed + hashtag filters + details) ----
+# ---- Groups (collapsed + details, with hashtag filter) ----
 with tab_groups:
     st.subheader("Groups (collapsed positions)")
 
@@ -554,49 +548,48 @@ with tab_groups:
     if not groups:
         st.info("No groups yet. Create them from the Trades tab after importing.")
     else:
-        # Build rollup
+        # COLLAPSED TABLE (one line per group)
         roll = _rollup_by_group(mem_df)
 
         # join names/notes
         name_map = {g["id"]: g["name"] for g in groups}
-        notes_map = {g["id"]: g.get("notes") or "" for g in groups}
+        notes_map = {g["id"]: g.get("notes") for g in groups}
         if not roll.empty:
             roll["name"] = roll["group_id"].map(name_map)
             roll["notes"] = roll["group_id"].map(notes_map)
 
-            # Hashtag extraction for filters
-            all_hashtags = set()
-            for n in roll["notes"].fillna(""):
-                for h in _extract_hashtags(n):
-                    all_hashtags.add(h)
-            all_hashtags = sorted(all_hashtags)
-
-            c1, c2, c3 = st.columns([1, 1, 3])
+            # Filters
+            c1, c2, c3 = st.columns([1, 2, 3])
             with c1:
-                day = st.date_input("Filter by day (first entry)", value=None)
+                day = st.date_input("Filter by day", value=None)
             with c2:
-                tag_filter = st.multiselect("Filter by #hashtag", options=all_hashtags, default=[])
+                hashtag_str = st.text_input("Filter by #hashtags in notes (comma-separated)", value="")
+            with c3:
+                sym = st.text_input("Symbol filter (optional)", value="").strip().upper()
 
             rshow = roll.copy()
+            # day filter
             if day is not None:
                 try:
                     rshow = rshow[rshow["first_entry"].dt.date == day]
                 except Exception:
                     pass
-            if tag_filter:
-                # keep rows where notes contain ALL selected hashtags
-                def _has_all_tags(text):
-                    tags = set(_extract_hashtags(text or ""))
-                    return all(t in tags for t in tag_filter)
-                mask = rshow["notes"].apply(_has_all_tags)
-                rshow = rshow[mask]
+            # hashtag filter (all hashtags must appear in notes)
+            if hashtag_str.strip():
+                tags = [t.strip().lstrip("#").lower() for t in hashtag_str.split(",") if t.strip()]
+                def _has_all_hashtags(txt):
+                    s = (txt or "").lower()
+                    return all(("#" + t) in s for t in tags)
+                rshow = rshow[rshow["notes"].apply(_has_all_hashtags)]
+            # symbol filter
+            if sym:
+                rshow = rshow[(rshow["symbol"].fillna("") == sym)]
 
             show_cols = [
                 "name","symbol","side","first_entry","last_exit",
                 "legs","total_qty","vwap_entry","vwap_exit","pnl_net_sum","notes"
             ]
             show_cols = [c for c in show_cols if c in rshow.columns]
-
             st.markdown("**Collapsed (1 row per group)**")
             st.dataframe(
                 rshow[show_cols].sort_values(["first_entry"], ascending=[False]),
@@ -612,4 +605,75 @@ with tab_groups:
             gid = label_to_id[choice]
 
             gdf = mem_df[mem_df["group_id"] == gid].copy()
-            if gdf.empty
+            if gdf.empty:
+                st.info("No member trades in this group.")
+            else:
+                # summary metrics for the chosen group
+                groll = _rollup_by_group(gdf.assign(group_id=gid))
+                if not groll.empty:
+                    row = groll.iloc[0]
+                    m1,m2,m3,m4 = st.columns(4)
+                    m1.metric("Legs", f"{int(row['legs'])}")
+                    m2.metric("Total Qty", f"{row['total_qty']:.0f}")
+                    m3.metric("VWAP Entry", "-" if row['vwap_entry'] is None else f"{row['vwap_entry']:.2f}")
+                    m4.metric("VWAP Exit", "-" if row['vwap_exit'] is None else f"{row['vwap_exit']:.2f}")
+                    st.metric("Net PnL (group)", f"{row['pnl_net_sum']:.2f}")
+
+                trade_cols = ["external_trade_id","symbol","side",
+                              "entry_ts_est","exit_ts_est","qty","entry_px","exit_px",
+                              "pnl_net","r_multiple","review_status"]
+                trade_cols = [c for c in trade_cols if c in gdf.columns]
+                st.dataframe(gdf[trade_cols].sort_values("entry_ts_est"), use_container_width=True)
+        else:
+            st.info("You have groups, but no member trades yet.")
+
+# ---- Guardrails ----
+with tab_guards:
+    st.subheader("Guardrails (quick checks)")
+    df = _load_trades()
+    if df.empty:
+        st.info("No trades yet.")
+    else:
+        df = df.sort_values("entry_ts_est")
+        st.metric("Win rate", f"{(df['pnl_net'] > 0).mean():.0%}")
+        st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(days=7))).sum()))
+        st.metric("Net PnL (sum)", f"{df['pnl_net'].sum():,.2f}")
+
+        hits = []
+        ts = df["entry_ts_est"].tolist()
+        i = j = 0
+        while i < len(ts):
+            while j < len(ts) and (ts[j] - ts[i]) <= timedelta(minutes=60):
+                j += 1
+            if j - i > 6:
+                hits.append({"rule": "trades_per_60m_gt_6", "start": ts[i], "end": ts[j-1], "count": j - i})
+            i += 1
+
+        streak = 0
+        start = None
+        for _, r in df.iterrows():
+            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
+            if pnl < 0:
+                if streak == 0:
+                    start = r["entry_ts_est"]
+                streak += 1
+                if streak > 3:
+                    hits.append({"rule": "consecutive_losses_gt_3", "start": start, "end": r["exit_ts_est"], "count": streak})
+            else:
+                streak = 0
+                start = None
+
+        last_loss_exit = None
+        for _, r in df.sort_values("exit_ts_est").iterrows():
+            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
+            if pnl < 0:
+                last_loss_exit = r["exit_ts_est"]
+            else:
+                if last_loss_exit is not None and (r["entry_ts_est"] - last_loss_exit).total_seconds() <= 5 * 60:
+                    hits.append({"rule": "reentry_under_5m_after_loss", "loss_exit": last_loss_exit, "reentry": r["entry_ts_est"]})
+                last_loss_exit = None
+
+        if hits:
+            st.dataframe(pd.DataFrame(hits), use_container_width=True)
+        else:
+            st.success("No guardrail hits.")
