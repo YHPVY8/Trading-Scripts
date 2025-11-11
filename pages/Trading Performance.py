@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 import io, csv
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
@@ -13,51 +14,62 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
-# ---------- DB helpers ----------
+# ---------- Helpers ----------
+def _to_iso_est(ts_str: str):
+    """
+    Convert strings like 'MM/DD/YYYY HH:MM:SS -03:00' -> 'YYYY-MM-DD HH:MM:SS'
+    (no timezone) so they match Postgres TIMESTAMP WITHOUT TIME ZONE.
+    Returns None if unparsable.
+    """
+    if not ts_str:
+        return None
+    s = str(ts_str).strip()
+    # Strip trailing " +/-HH:MM" offset if present
+    parts = s.rsplit(" ", 1)
+    if len(parts) == 2 and len(parts[1]) == 6 and parts[1][3] == ":" and (parts[1][0] in "+-"):
+        s = parts[0]
+    dt = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
+    if pd.isna(dt):
+        return None
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
 def _upsert_trades_from_rows(rows):
     """
-    Upsert CSV rows into tj_trades using your actual headers:
+    Upsert CSV rows into tj_trades using these headers:
     Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Size, Type, PnL, Fees, Commissions
-    Keeps EST/clock time by stripping the trailing timezone and formatting in ISO for PostgREST.
-    Shows a few errors if any rows fail.
+    Returns (inserted, skipped, error_list, sample_payloads).
     """
-    def _to_iso(ts_str: str):
-        if not ts_str:
-            return None
-        s = str(ts_str).strip()
-        # Strip trailing " +/-HH:MM" (e.g., '11/04/2025 15:00:17 -03:00' -> '11/04/2025 15:00:17')
-        parts = s.rsplit(" ", 1)
-        if len(parts) == 2 and len(parts[1]) == 6 and parts[1][3] == ":" and (parts[1][0] in "+-"):
-            s = parts[0]
-        # Parse and reformat to ISO 'YYYY-MM-DD HH:MM:SS'
-        dt = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
-        if pd.isna(dt):
-            return None
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-
     inserted = 0
     skipped = 0
-    errs = []  # collect first few errors to display
+    errs = []
+    sample_payloads = []
 
     for r in rows:
         try:
             ext_id = r.get("Id")
             if not ext_id:
                 skipped += 1
+                if len(errs) < 10:
+                    errs.append({"Id": None, "error": "Missing Id"})
                 continue
 
             # Side mapping supports Long/Short and Buy/Sell
             t = (r.get("Type", "") or "").strip().lower()
-            side = "long" if t in ("long", "buy", "b") else ("short" if t in ("short", "sell", "s") else None)
+            if t in ("long", "buy", "b"):
+                side = "long"
+            elif t in ("short", "sell", "s"):
+                side = "short"
+            else:
+                side = None  # allow editing later
 
-            # Quantity = Size
+            # Quantity = Size (fallbacks included)
             qty_val = r.get("Size") or r.get("Quantity") or r.get("Qty")
 
-            # Symbol = ContractName
+            # Symbol = ContractName (fallback to Symbol if present)
             contract = (r.get("ContractName") or r.get("Symbol") or "").strip().upper()
             symbol = contract or None
 
-            # Fees = Fees + Commissions
+            # Fees = Fees + Commissions (either may be missing)
             f1 = pd.to_numeric(r.get("Fees"), errors="coerce")
             f2 = pd.to_numeric(r.get("Commissions"), errors="coerce")
             fees_val = (0 if pd.isna(f1) else float(f1)) + (0 if pd.isna(f2) else float(f2))
@@ -67,8 +79,8 @@ def _upsert_trades_from_rows(rows):
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
-                "entry_ts_est": _to_iso(r.get("EnteredAt")),
-                "exit_ts_est":  _to_iso(r.get("ExitedAt")),
+                "entry_ts_est": _to_iso_est(r.get("EnteredAt")),
+                "exit_ts_est":  _to_iso_est(r.get("ExitedAt")),
                 "entry_px":  float(r["EntryPrice"]) if r.get("EntryPrice")  not in (None, "") else None,
                 "exit_px":   float(r["ExitPrice"])  if r.get("ExitPrice")   not in (None, "") else None,
                 "qty":       float(qty_val)         if qty_val               not in (None, "") else None,
@@ -77,21 +89,24 @@ def _upsert_trades_from_rows(rows):
                 "source": "csv",
             }
 
-            # sanity: require minimally entry_ts_est and exit_ts_est
+            # Keep a few examples for diagnostics
+            if len(sample_payloads) < 5:
+                sample_payloads.append(payload.copy())
+
+            # Minimal sanity to avoid NOT NULL errors
             if not payload["entry_ts_est"] or not payload["exit_ts_est"]:
                 raise ValueError(f"Bad timestamps for Id={ext_id}: {r.get('EnteredAt')} / {r.get('ExitedAt')}")
 
+            # Actual upsert (raises on RLS/constraint/column issues)
             sb.table("tj_trades").upsert(payload, on_conflict="user_id,external_trade_id").execute()
             inserted += 1
 
         except Exception as e:
             skipped += 1
-            if len(errs) < 5:
-                errs.append({"Id": r.get("Id"), "error": str(e)})
+            if len(errs) < 10:
+                errs.append({"Id": r.get("Id"), "error": repr(e)})
 
-    return inserted, skipped, errs
-
-
+    return inserted, skipped, errs, sample_payloads
 
 @st.cache_data(ttl=60)
 def _load_trades(limit=4000):
@@ -106,18 +121,22 @@ def _load_trades(limit=4000):
     return df
 
 def _save_comments(trade_ids, body):
-    if not body or not trade_ids: return
+    if not body or not trade_ids: 
+        return
     rows = [{"trade_id": tid, "user_id": USER_ID, "body": body} for tid in trade_ids]
     sb.table("tj_trade_comments").insert(rows).execute()
 
 def _save_tags(trade_ids, tags):
-    if not tags or not trade_ids: return
+    if not tags or not trade_ids: 
+        return
     rows = [{"trade_id": tid, "user_id": USER_ID, "tag": t} for tid in trade_ids for t in tags]
     sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag").execute()
 
 def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
     if new_group_name:
-        g = sb.table("tj_trade_groups").insert({"user_id": USER_ID, "name": new_group_name, "notes": notes}).execute().data[0]
+        g = sb.table("tj_trade_groups").insert(
+            {"user_id": USER_ID, "name": new_group_name, "notes": notes}
+        ).execute().data[0]
         group_id = g["id"]
     if group_id and trade_ids:
         rows = [{"group_id": group_id, "trade_id": tid} for tid in trade_ids]
@@ -140,17 +159,55 @@ with tab_upload:
         "Drop your trade export (Id, ContractName, EnteredAt, ExitedAt, EntryPrice, ExitPrice, Size, Type, PnL, Fees, Commissions, ...)",
         type=["csv"]
     )
+
     if up:
         content = up.read().decode("utf-8", errors="ignore")
         rows = list(csv.DictReader(io.StringIO(content)))
-        ins, skip, errs = _upsert_trades_from_rows(rows)
-        st.success(f"Imported {ins} rows (skipped {skip}).")
-        if errs:
-            st.error("Sample errors:")
-            st.json(errs)
-        st.cache_data.clear()
-        st.rerun()
 
+        # Show headers we detected, helps confirm mapping instantly
+        if rows:
+            st.caption("Detected columns: " + ", ".join(rows[0].keys()))
+
+        ins, skip, errs, samples = _upsert_trades_from_rows(rows)
+
+        # Report counts
+        if ins > 0:
+            st.success(f"Imported {ins} rows (skipped {skip}).")
+            st.cache_data.clear()
+        else:
+            st.error(f"Imported {ins} rows (skipped {skip}).")
+
+        # Always show diagnostics if anything failed
+        if samples:
+            with st.expander("Sample payloads attempted (first 5)"):
+                st.json(samples)
+        if errs:
+            with st.expander("Sample errors (first 10)"):
+                st.json(errs)
+
+        # Only rerun if we actually inserted something (avoids hiding error details)
+        if ins > 0:
+            st.rerun()
+
+    # Optional: quick sanity probe to test DB insert path
+    with st.expander("Insert sanity probe (optional)"):
+        if st.button("Run insert probe"):
+            probe_id = "PROBE-" + pd.Timestamp.utcnow().strftime("%Y%m%d%H%M%S")
+            probe_payload = {
+                "user_id": USER_ID,
+                "external_trade_id": probe_id,
+                "symbol": "TEST",
+                "side": "long",
+                "entry_ts_est": (datetime.now()).strftime("%Y-%m-%d %H:%M:%S"),
+                "exit_ts_est":  (datetime.now() + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S"),
+                "entry_px": 1.0, "exit_px": 1.1, "qty": 1, "pnl_gross": 0.1, "fees": 0.0, "source": "probe",
+            }
+            try:
+                sb.table("tj_trades").upsert(probe_payload, on_conflict="user_id,external_trade_id").execute()
+                st.success("Insert probe succeeded (cleaning up).")
+                sb.table("tj_trades").delete().eq("user_id", USER_ID).eq("external_trade_id", probe_id).execute()
+            except Exception as e:
+                st.error(f"Insert probe failed: {repr(e)}")
 
 # ---- Trades ----
 with tab_trades:
@@ -293,7 +350,6 @@ with tab_guards:
         st.metric("Net P&L (sum)", f"{df['pnl_net'].sum():,.2f}")
 
         # Simple detectors
-        from datetime import timedelta
         hits = []
 
         # 1) Max trades per 60 min > 6
