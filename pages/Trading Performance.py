@@ -2,7 +2,7 @@
 #!/usr/bin/env python3
 import io
 import hashlib
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pandas as pd
 import streamlit as st
@@ -11,7 +11,8 @@ from supabase import create_client
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
 # ===== CONFIG =====
-USE_USER_SCOPING = False  # keep False (global). Flip True only if you later add USER_ID scoping.
+# Your DB requires user_id NOT NULL -> enable scoping
+USE_USER_SCOPING = True
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -108,22 +109,19 @@ def _read_csv_to_rows(uploaded_bytes: bytes):
     }
     return rows, debug
 
-# ---------- insert-or-update (no ON CONFLICT needed) ----------
+# ---------- insert-or-update (manual upsert keyed by user_id + external_trade_id) ----------
 def _insert_or_update_trade(payload: dict):
-    """Upsert by external_trade_id (and user_id if scoping), without ON CONFLICT, to avoid constraint issues."""
-    q = sb.table("tj_trades").select("id", count="exact")
-    q = q.eq("external_trade_id", payload["external_trade_id"])
-    if USE_USER_SCOPING:
-        q = q.eq("user_id", payload["user_id"])
-    res = q.limit(1).execute()
+    q = sb.table("tj_trades").select("id", count="exact") \
+        .eq("external_trade_id", payload["external_trade_id"]) \
+        .eq("user_id", payload["user_id"]) \
+        .limit(1)
+    res = q.execute()
     existing = (res.data or [])
     if existing:
-        # Update by id
         tid = existing[0]["id"]
         sb.table("tj_trades").update(payload).eq("id", tid).execute()
         return "updated"
     else:
-        # Insert new
         sb.table("tj_trades").insert(payload).execute()
         return "inserted"
 
@@ -152,6 +150,7 @@ def _upsert_trades_from_rows(rows):
                 raise ValueError(f"Missing/Bad EnteredAt: {r.get('enteredat')}")
 
             payload = {
+                "user_id": USER_ID,                 # <- REQUIRED by your DB
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
@@ -164,8 +163,6 @@ def _upsert_trades_from_rows(rows):
                 "fees":      fees_val,
                 "source": "csv",
             }
-            if USE_USER_SCOPING:
-                payload["user_id"] = USER_ID
 
             if len(samples) < 5:
                 samples.append(dict(payload))
@@ -194,9 +191,7 @@ def _load_trades(limit=4000):
     sel = sb.table("tj_trades").select(
         "id,external_trade_id,symbol,side,entry_ts_est,exit_ts_est,entry_px,exit_px,qty,"
         "pnl_gross,fees,pnl_net,planned_risk,r_multiple,review_status"
-    )
-    if USE_USER_SCOPING:
-        sel = sel.eq("user_id", USER_ID)
+    ).eq("user_id", USER_ID)
     res = sel.order("entry_ts_est", desc=True).limit(limit).execute()
     df = pd.DataFrame(res.data or [])
     if not df.empty:
@@ -216,30 +211,18 @@ def _fetch_tags_for(trade_ids):
 def _save_comments(trade_ids, body):
     if not body or not trade_ids:
         return
-    rows = [{"trade_id": tid, "user_id": USER_ID if USE_USER_SCOPING else None, "body": body} for tid in trade_ids]
-    for r in rows:
-        if r["user_id"] is None:
-            r.pop("user_id")
+    rows = [{"trade_id": tid, "user_id": USER_ID, "body": body} for tid in trade_ids]
     sb.table("tj_trade_comments").insert(rows).execute()
 
 def _save_tags(trade_ids, tags):
     if not tags or not trade_ids:
         return
-    rows = []
-    for tid in trade_ids:
-        for t in tags:
-            r = {"trade_id": tid, "tag": t}
-            if USE_USER_SCOPING:
-                r["user_id"] = USER_ID
-            rows.append(r)
-    sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag").execute()
+    rows = [{"trade_id": tid, "user_id": USER_ID, "tag": t} for tid in trade_ids for t in tags]
+    sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag,user_id").execute()
 
 def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
     if new_group_name:
-        payload = {"name": new_group_name, "notes": notes}
-        if USE_USER_SCOPING:
-            payload["user_id"] = USER_ID
-        g = sb.table("tj_trade_groups").insert(payload).execute().data[0]
+        g = sb.table("tj_trade_groups").insert({"user_id": USER_ID, "name": new_group_name, "notes": notes}).execute().data[0]
         group_id = g["id"]
     if group_id and trade_ids:
         rows = [{"group_id": group_id, "trade_id": tid} for tid in trade_ids]
@@ -247,20 +230,22 @@ def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
     return group_id
 
 def _get_groups():
-    q = sb.table("tj_trade_groups").select("id,name,created_at")
-    if USE_USER_SCOPING:
-        q = q.eq("user_id", USER_ID)
-    return q.order("created_at", desc=True).execute().data or []
+    res = sb.table("tj_trade_groups").select("id,name,created_at").eq("user_id", USER_ID).order("created_at", desc=True).execute()
+    return res.data or []
 
 # ---------- UI ----------
 st.title("Trading Performance (EST)")
 tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "Groups", "Guardrails"])
 
+# Guard to avoid endless rerun loop after import
+if "just_imported" not in st.session_state:
+    st.session_state.just_imported = False
+
 # ---- Upload ----
 with tab_upload:
     st.subheader("Upload CSV")
     up = st.file_uploader("Drop your trade export", type=["csv"])
-    if up:
+    if up and not st.session_state.just_imported:
         rows, dbg = _read_csv_to_rows(up.read())
         st.caption("Original headers: " + ", ".join(dbg["original_headers"]))
         st.caption("Normalized headers: " + ", ".join(dbg["normalized_headers"]))
@@ -279,9 +264,16 @@ with tab_upload:
                 with st.expander("Errors (first 25)"):
                     st.json(errs)
             st.cache_data.clear()
+            # avoid infinite refresh churn — mark once, then rerun
+            st.session_state.just_imported = True
             st.rerun()
         else:
             st.error("No rows found.")
+    elif st.session_state.just_imported:
+        st.info("Upload complete. Switch tabs or upload again.")
+        # reset the flag if user clears/re-uploads
+        if up is None:
+            st.session_state.just_imported = False
 
 # ---- Trades ----
 with tab_trades:
