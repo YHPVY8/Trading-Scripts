@@ -30,11 +30,9 @@ def _to_iso_est(ts_str: str):
     if not ts_str:
         return None
     s = str(ts_str).strip()
-    # If the last token looks like a timezone offset ("-03:00" or "+00:00"), drop it
     parts = s.rsplit(" ", 1)
     if len(parts) == 2 and len(parts[1]) == 6 and parts[1][3] == ":" and (parts[1][0] in "+-"):
         s = parts[0]
-    # Parse flexibly
     dt = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
     if pd.isna(dt):
         return None
@@ -110,7 +108,26 @@ def _read_csv_to_rows(uploaded_bytes: bytes):
     }
     return rows, debug
 
-# ---------- Upsert ----------
+# ---------- insert-or-update (no ON CONFLICT needed) ----------
+def _insert_or_update_trade(payload: dict):
+    """Upsert by external_trade_id (and user_id if scoping), without ON CONFLICT, to avoid constraint issues."""
+    q = sb.table("tj_trades").select("id", count="exact")
+    q = q.eq("external_trade_id", payload["external_trade_id"])
+    if USE_USER_SCOPING:
+        q = q.eq("user_id", payload["user_id"])
+    res = q.limit(1).execute()
+    existing = (res.data or [])
+    if existing:
+        # Update by id
+        tid = existing[0]["id"]
+        sb.table("tj_trades").update(payload).eq("id", tid).execute()
+        return "updated"
+    else:
+        # Insert new
+        sb.table("tj_trades").insert(payload).execute()
+        return "inserted"
+
+# ---------- Upsert loop ----------
 def _upsert_trades_from_rows(rows):
     inserted = skipped = 0
     errs, samples = [], []
@@ -131,7 +148,6 @@ def _upsert_trades_from_rows(rows):
             entry_iso = _to_iso_est(r.get("enteredat"))
             exit_iso  = _to_iso_est(r.get("exitedat"))
 
-            # ---- Only require entry timestamp. Exit can be None (open trade).
             if not entry_iso:
                 raise ValueError(f"Missing/Bad EnteredAt: {r.get('enteredat')}")
 
@@ -154,9 +170,11 @@ def _upsert_trades_from_rows(rows):
             if len(samples) < 5:
                 samples.append(dict(payload))
 
-            conflict_target = "user_id,external_trade_id" if USE_USER_SCOPING else "external_trade_id"
-            sb.table("tj_trades").upsert(payload, on_conflict=conflict_target).execute()
-            inserted += 1
+            status = _insert_or_update_trade(payload)
+            if status in ("inserted", "updated"):
+                inserted += 1
+            else:
+                skipped += 1
 
         except Exception as e:
             skipped += 1
