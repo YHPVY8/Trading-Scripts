@@ -10,7 +10,8 @@ from supabase import create_client
 
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
-# ---- Supabase client (your pattern) ----
+# ===== CONFIG =====
+USE_USER_SCOPING = False  # <- set True only if you want per-user rows
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -18,7 +19,6 @@ USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 # ---------- Utilities ----------
 def _clean_header(name: str) -> str:
-    """Strip BOM/spaces, collapse inner spaces, lowercase."""
     if name is None:
         return ""
     s = str(name).replace("\ufeff", "").strip()
@@ -26,10 +26,6 @@ def _clean_header(name: str) -> str:
     return s.lower()
 
 def _to_iso_est(ts_str: str):
-    """
-    Convert 'MM/DD/YYYY HH:MM:SS -03:00' -> 'YYYY-MM-DD HH:MM:SS' (no tz).
-    Returns None if unparsable.
-    """
     if not ts_str:
         return None
     s = str(ts_str).strip()
@@ -42,7 +38,6 @@ def _to_iso_est(ts_str: str):
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 def _synth_id(row: dict) -> str:
-    """Deterministic synthesized Id if CSV lacks an Id."""
     key = "|".join([
         str(row.get("contractname", "")).strip().upper(),
         str(row.get("enteredat", "")).strip(),
@@ -66,13 +61,6 @@ def _as_float(x):
 
 # ---------- CSV -> canonical rows (via pandas) ----------
 def _read_csv_to_rows(uploaded_bytes: bytes):
-    """
-    Robust CSV reader using pandas:
-    - auto-detect delimiter (sep=None, engine='python')
-    - preserves all columns
-    - normalizes headers
-    Returns (rows, debug_info).
-    """
     df = pd.read_csv(
         io.BytesIO(uploaded_bytes),
         sep=None,
@@ -80,66 +68,30 @@ def _read_csv_to_rows(uploaded_bytes: bytes):
         dtype=str,
         keep_default_na=False,
     )
-
     original_headers = list(df.columns)
     norm_headers = [_clean_header(h) for h in original_headers]
     df.columns = norm_headers
 
-    # Alias map -> canonical
-    # Canonical keys we store: id, contractname, enteredat, exitedat, entryprice, exitprice, size, type, pnl, fees, commissions
     alias_map = {
-        "id": "id",
-        "trade id": "id",
-        "tradeid": "id",
-        "external id": "id",
-
-        "contractname": "contractname",
-        "contract": "contractname",
-        "market": "contractname",
-        "symbol": "contractname",
-
-        "enteredat": "enteredat",
-        "entry time": "enteredat",
-        "entry": "enteredat",
-
-        "exitedat": "exitedat",
-        "exit time": "exitedat",
-        "exit": "exitedat",
-
-        "entryprice": "entryprice",
-        "entry price": "entryprice",
-        "exitprice": "exitprice",
-        "exit price": "exitprice",
-
-        "size": "size",
-        "quantity": "size",
-        "qty": "size",
-
-        "type": "type",
-        "side": "type",
-
-        "pnl": "pnl",
-        "p&l": "pnl",
-        "profit": "pnl",
-
-        "fees": "fees",
-        "fee": "fees",
-
-        "commissions": "commissions",
-        "commission": "commissions",
-
-        # Extras (not required)
-        "tradeday": "tradeday",
-        "tradeduration": "tradeduration",
+        "id": "id", "trade id": "id", "tradeid": "id", "external id": "id",
+        "contractname": "contractname", "contract": "contractname", "market": "contractname", "symbol": "contractname",
+        "enteredat": "enteredat", "entry time": "enteredat", "entry": "enteredat",
+        "exitedat": "exitedat", "exit time": "exitedat", "exit": "exitedat",
+        "entryprice": "entryprice", "entry price": "entryprice",
+        "exitprice": "exitprice", "exit price": "exitprice",
+        "size": "size", "quantity": "size", "qty": "size",
+        "type": "type", "side": "type",
+        "pnl": "pnl", "p&l": "pnl", "profit": "pnl",
+        "fees": "fees", "fee": "fees",
+        "commissions": "commissions", "commission": "commissions",
+        "tradeday": "tradeday", "tradeduration": "tradeduration",
     }
 
-    # Build canonical column mapping: choose the first alias present for each canonical key
     canonical_cols = {}
     for src, canon in alias_map.items():
         if src in df.columns and canon not in canonical_cols:
             canonical_cols[canon] = src
 
-    # Build rows as canonical dicts
     rows = []
     for _, r in df.iterrows():
         row = {}
@@ -157,39 +109,23 @@ def _read_csv_to_rows(uploaded_bytes: bytes):
 
 # ---------- Upsert ----------
 def _upsert_trades_from_rows(rows):
-    """
-    Upsert canonical rows into tj_trades.
-    Returns (inserted, skipped, errors, sample_payloads).
-    """
-    inserted = 0
-    skipped = 0
-    errs = []
-    samples = []
+    inserted = skipped = 0
+    errs, samples = [], []
 
     for r in rows:
         try:
-            ext_id = (r.get("id") or "").strip()
-            if not ext_id:
-                ext_id = _synth_id(r)
-
+            ext_id = (r.get("id") or "").strip() or _synth_id(r)
             t = (r.get("type", "") or "").strip().lower()
-            if t in ("long", "buy", "b"):
-                side = "long"
-            elif t in ("short", "sell", "s"):
-                side = "short"
-            else:
-                side = None
+            side = "long" if t in ("long", "buy", "b") else ("short" if t in ("short", "sell", "s") else None)
 
             qty_val = r.get("size")
-            contract = (r.get("contractname") or "").strip().upper()
-            symbol = contract or None
+            symbol = (r.get("contractname") or "").strip().upper() or None
 
             f1 = _as_float(r.get("fees")) or 0.0
             f2 = _as_float(r.get("commissions")) or 0.0
             fees_val = float(f1) + float(f2)
 
             payload = {
-                "user_id": USER_ID,
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
@@ -202,6 +138,8 @@ def _upsert_trades_from_rows(rows):
                 "fees":      fees_val,
                 "source": "csv",
             }
+            if USE_USER_SCOPING:
+                payload["user_id"] = USER_ID
 
             if len(samples) < 5:
                 samples.append(dict(payload))
@@ -209,7 +147,9 @@ def _upsert_trades_from_rows(rows):
             if not payload["entry_ts_est"] or not payload["exit_ts_est"]:
                 raise ValueError(f"Bad timestamps: {r.get('enteredat')} / {r.get('exitedat')}")
 
-            sb.table("tj_trades").upsert(payload, on_conflict="user_id,external_trade_id").execute()
+            # Choose on_conflict target based on mode
+            conflict_target = "user_id,external_trade_id" if USE_USER_SCOPING else "external_trade_id"
+            sb.table("tj_trades").upsert(payload, on_conflict=conflict_target).execute()
             inserted += 1
 
         except Exception as e:
@@ -221,42 +161,18 @@ def _upsert_trades_from_rows(rows):
 
 @st.cache_data(ttl=60)
 def _load_trades(limit=4000):
-    res = sb.table("tj_trades").select(
+    sel = sb.table("tj_trades").select(
         "id,external_trade_id,symbol,side,entry_ts_est,exit_ts_est,entry_px,exit_px,qty,"
         "pnl_gross,fees,pnl_net,planned_risk,r_multiple,review_status"
-    ).eq("user_id", USER_ID).order("entry_ts_est", desc=True).limit(limit).execute()
+    )
+    if USE_USER_SCOPING:
+        sel = sel.eq("user_id", USER_ID)
+    res = sel.order("entry_ts_est", desc=True).limit(limit).execute()
     df = pd.DataFrame(res.data or [])
     if not df.empty:
         df["entry_ts_est"] = pd.to_datetime(df["entry_ts_est"])
         df["exit_ts_est"]  = pd.to_datetime(df["exit_ts_est"])
     return df
-
-def _save_comments(trade_ids, body):
-    if not body or not trade_ids:
-        return
-    rows = [{"trade_id": tid, "user_id": USER_ID, "body": body} for tid in trade_ids]
-    sb.table("tj_trade_comments").insert(rows).execute()
-
-def _save_tags(trade_ids, tags):
-    if not tags or not trade_ids:
-        return
-    rows = [{"trade_id": tid, "user_id": USER_ID, "tag": t} for tid in trade_ids for t in tags]
-    sb.table("tj_trade_tags").upsert(rows, on_conflict="trade_id,tag").execute()
-
-def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
-    if new_group_name:
-        g = sb.table("tj_trade_groups").insert(
-            {"user_id": USER_ID, "name": new_group_name, "notes": notes}
-        ).execute().data[0]
-        group_id = g["id"]
-    if group_id and trade_ids:
-        rows = [{"group_id": group_id, "trade_id": tid} for tid in trade_ids]
-        sb.table("tj_trade_group_members").upsert(rows, on_conflict="group_id,trade_id").execute()
-    return group_id
-
-def _get_groups():
-    res = sb.table("tj_trade_groups").select("id,name,created_at").eq("user_id", USER_ID).order("created_at", desc=True).execute()
-    return res.data or []
 
 # ---------- UI ----------
 st.title("Trading Performance (EST)")
@@ -266,11 +182,12 @@ tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "G
 # ---- Upload ----
 with tab_upload:
     st.subheader("Upload CSV")
-    up = st.file_uploader("Drop your trade export (tabs or commas are OK; headers auto-detected)", type=["csv"])
+    mode_text = "Scoped by USER_ID" if USE_USER_SCOPING else "Global (no user_id)"
+    st.caption(f"Mode: {mode_text}" + (f" — USER_ID: {USER_ID}" if USE_USER_SCOPING else ""))
+
+    up = st.file_uploader("Drop your trade export (tabs or commas OK; headers auto-detected)", type=["csv"])
     if up:
         rows, dbg = _read_csv_to_rows(up.read())
-
-        # Diagnostics
         st.caption("Original headers: " + ", ".join(dbg["original_headers"]))
         st.caption("Normalized headers: " + ", ".join(dbg["normalized_headers"]))
         st.caption("Canonical mapped pairs: " + ", ".join([f"{pair[1]} -> {pair[0]}" for pair in dbg["canonical_mapped_pairs"]]))
@@ -298,7 +215,10 @@ with tab_trades:
     st.subheader("Trades")
     df = _load_trades()
     if df.empty:
-        st.info("No trades yet — upload a CSV in the Upload tab.")
+        hint = "Upload trades in the Upload tab."
+        if USE_USER_SCOPING:
+            hint += " (Check that your USER_ID in secrets matches the one used at insert.)"
+        st.info(hint)
     else:
         orig = df.copy()
         if "selected" not in df.columns:
@@ -325,6 +245,7 @@ with tab_trades:
         )
         edited = edited.rename(columns={v: k for k, v in rename_map.items()})
 
+        # Persist inline edits
         diff_cols = ["planned_risk", "r_multiple", "review_status"]
         to_update = []
         merged = edited.merge(orig[["id"] + diff_cols], on="id", suffixes=("", "_old"))
@@ -347,52 +268,14 @@ with tab_trades:
             st.toast(f"Saved {len(to_update)} inline edit(s)")
             st.cache_data.clear()
 
-        selected_ids = edited.loc[edited["selected"] == True, "id"].tolist()
-        with st.form("bulk_actions_native", clear_on_submit=True):
-            st.write(f"Selected: {len(selected_ids)}")
-            comment = st.text_area("Add comment (markdown)")
-            tag_str = st.text_input("Add tags (comma-separated)")
-            gmode = st.radio("Group", ["None", "Add to existing", "Create new"], horizontal=True)
-
-            existing = None
-            new_group = None
-            notes = None
-            if gmode == "Add to existing":
-                groups = _get_groups()
-                if groups:
-                    labels = [f"{g['name']} ({g['id'][:6]})" for g in groups]
-                    idx = st.selectbox(
-                        "Pick group",
-                        list(range(len(labels))) if labels else [],
-                        format_func=lambda i: labels[i] if labels else None
-                    )
-                    if groups and len(groups) > 0:
-                        existing = groups[idx]["id"]
-                else:
-                    st.info("No groups yet — choose 'Create new'.")
-            elif gmode == "Create new":
-                new_group = st.text_input("New group name")
-                notes = st.text_input("Group notes (optional)")
-
-            do = st.form_submit_button("Apply")
-
-        if do and selected_ids:
-            if comment:
-                _save_comments(selected_ids, comment)
-            tags = [t.strip() for t in tag_str.split(",") if t.strip()]
-            if tags:
-                _save_tags(selected_ids, tags)
-            if gmode == "Add to existing" and existing:
-                _add_to_group(selected_ids, group_id=existing)
-            elif gmode == "Create new" and new_group:
-                _add_to_group(selected_ids, new_group_name=new_group, notes=notes)
-            st.success("Saved")
-            st.cache_data.clear()
-            st.rerun()
-
 # ---- Groups ----
 with tab_groups:
     st.subheader("Groups")
+    def _get_groups():
+        q = sb.table("tj_trade_groups").select("id,name,created_at")
+        if USE_USER_SCOPING:
+            q = q.eq("user_id", USER_ID)
+        return (q.order("created_at", desc=True).execute().data) or []
     groups = _get_groups()
     if not groups:
         st.info("No groups yet. Create one from the Trades tab.")
@@ -420,37 +303,29 @@ with tab_guards:
         df = df.sort_values("entry_ts_est")
         st.metric("Win rate", f"{(df['pnl_net']>0).mean():.0%}")
         st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(days=7))).sum()))
-        st.metric("Net PnL (sum)", f"{df['pnl_net'].sum():,.2f}")
+        st.metric("Net P&L (sum)", f"{df['pnl_net'].sum():,.2f}")
 
         hits = []
-
-        # 1) Max trades per 60 min > 6
         ts = df["entry_ts_est"].tolist()
         i = j = 0
         while i < len(ts):
             while j < len(ts) and (ts[j] - ts[i]) <= timedelta(minutes=60):
                 j += 1
-            count = j - i
-            if count > 6:
-                hits.append({"rule": "trades_per_60m_gt_6", "start": ts[i], "end": ts[j-1], "count": count})
+            if j - i > 6:
+                hits.append({"rule": "trades_per_60m_gt_6", "start": ts[i], "end": ts[j-1], "count": j - i})
             i += 1
 
-        # 2) Max consecutive losses > 3
-        streak = 0
-        start = None
+        streak = 0; start = None
         for _, r in df.iterrows():
             pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
             if pnl < 0:
-                if streak == 0:
-                    start = r["entry_ts_est"]
+                if streak == 0: start = r["entry_ts_est"]
                 streak += 1
                 if streak > 3:
                     hits.append({"rule": "consecutive_losses_gt_3", "start": start, "end": r["exit_ts_est"], "count": streak})
             else:
-                streak = 0
-                start = None
+                streak = 0; start = None
 
-        # 3) Re-entry under 5 minutes after a loss
         last_loss_exit = None
         for _, r in df.sort_values("exit_ts_est").iterrows():
             pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
