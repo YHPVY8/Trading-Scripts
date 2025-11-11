@@ -119,16 +119,18 @@ def _insert_or_update_trade(payload: dict):
     if existing:
         tid = existing[0]["id"]
         sb.table("tj_trades").update(payload).eq("id", tid).execute()
-        return "updated"
+        return "updated", tid
     else:
-        sb.table("tj_trades").insert(payload).execute()
-        return "inserted"
+        r = sb.table("tj_trades").insert(payload).execute()
+        tid = (r.data or [{}])[0].get("id")
+        return "inserted", tid
 
 # ---------- Upsert loop ----------
 def _upsert_trades_from_rows(rows):
     inserted = skipped = 0
     errs, samples = [], []
     inserted_external_ids = []
+    inserted_trade_ids = []
 
     for r in rows:
         try:
@@ -149,7 +151,7 @@ def _upsert_trades_from_rows(rows):
                 raise ValueError(f"Missing/Bad EnteredAt: {r.get('enteredat')}")
 
             payload = {
-                "user_id": USER_ID,                 # <- REQUIRED
+                "user_id": USER_ID,                 # <- REQUIRED (tj_trades.user_id NOT NULL)
                 "external_trade_id": ext_id,
                 "symbol": symbol,
                 "side": side,
@@ -166,10 +168,12 @@ def _upsert_trades_from_rows(rows):
             if len(samples) < 5:
                 samples.append(dict(payload))
 
-            status = _insert_or_update_trade(payload)
+            status, tid = _insert_or_update_trade(payload)
             if status in ("inserted", "updated"):
                 inserted += 1
                 inserted_external_ids.append(ext_id)
+                if tid:
+                    inserted_trade_ids.append(tid)
             else:
                 skipped += 1
 
@@ -183,7 +187,7 @@ def _upsert_trades_from_rows(rows):
                     "error": str(e),
                 })
 
-    return inserted, skipped, errs, samples, inserted_external_ids
+    return inserted, skipped, errs, samples, inserted_external_ids, inserted_trade_ids
 
 # ---------- Load ----------
 @st.cache_data(ttl=60)
@@ -201,7 +205,7 @@ def _load_trades(limit=4000):
 def _fetch_tags_for(trade_ids):
     if not trade_ids:
         return {}
-    data = sb.table("tj_trade_tags").select("trade_id,tag").in_("trade_id", trade_ids).execute().data
+    data = sb.table("tj_trade_tags").select("trade_id,tag").in_("trade_id", trade_ids).eq("user_id", USER_ID).execute().data
     tagmap = {}
     for r in data or []:
         tagmap.setdefault(r["trade_id"], []).append(r["tag"])
@@ -233,6 +237,94 @@ def _get_groups():
     res = sb.table("tj_trade_groups").select("id,name,notes,created_at").eq("user_id", USER_ID).order("created_at", desc=True).execute()
     return res.data or []
 
+# ===== Group collapsed helpers =====
+def _fetch_all_groups_with_members():
+    """
+    Returns (groups, members_df).
+    groups: list of group rows {id,name,notes,created_at}
+    members_df: DataFrame of joined group members with trade columns for this USER_ID
+    """
+    groups = sb.table("tj_trade_groups")\
+        .select("id,name,notes,created_at")\
+        .eq("user_id", USER_ID)\
+        .order("created_at", desc=True)\
+        .execute().data or []
+
+    mem = sb.table("tj_trade_group_members")\
+        .select("group_id, trade_id, tj_trades(*)")\
+        .execute().data or []
+
+    rows = []
+    for m in mem or []:
+        t = m.get("tj_trades") or {}
+        if t and t.get("user_id") == USER_ID:
+            t["group_id"] = m["group_id"]
+            rows.append(t)
+
+    df = pd.DataFrame(rows or [])
+    if not df.empty:
+        for c in ("entry_ts_est", "exit_ts_est"):
+            if c in df:
+                df[c] = pd.to_datetime(df[c])
+        for c in ("qty", "entry_px", "exit_px", "pnl_gross", "fees", "pnl_net"):
+            if c in df:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+    return groups, df
+
+def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Collapse trades to one row per group_id with:
+    group_id, first_entry, last_exit, legs, total_qty, vwap_entry, vwap_exit,
+    symbol(mode), side(mode), pnl_net_sum
+    """
+    if members_df.empty:
+        return pd.DataFrame()
+
+    def _mode(series):
+        s = series.dropna()
+        return s.mode().iloc[0] if not s.empty else None
+
+    out = []
+    for gid, gdf in members_df.groupby("group_id"):
+        legs = len(gdf)
+        qty = gdf["qty"].fillna(0).abs()
+
+        # VWAP Entry
+        ok_e = gdf["entry_px"].notna()
+        w_entry = qty.where(ok_e, 0)
+        vwap_entry = (gdf["entry_px"].where(ok_e, 0) * qty).sum() / (w_entry.sum() if w_entry.sum() else float("nan"))
+        vwap_entry = None if pd.isna(vwap_entry) else float(vwap_entry)
+
+        # VWAP Exit
+        ok_x = gdf["exit_px"].notna()
+        w_exit = qty.where(ok_x, 0)
+        vwap_exit = (gdf["exit_px"].where(ok_x, 0) * qty).sum() / (w_exit.sum() if w_exit.sum() else float("nan"))
+        vwap_exit = None if pd.isna(vwap_exit) else float(vwap_exit)
+
+        first_entry = gdf["entry_ts_est"].min()
+        last_exit   = gdf["exit_ts_est"].max()
+        total_qty   = gdf["qty"].fillna(0).sum()
+
+        # Net PnL
+        if "pnl_net" in gdf and gdf["pnl_net"].notna().any():
+            pnl_sum = gdf["pnl_net"].fillna(0).sum()
+        else:
+            pnl_sum = gdf["pnl_gross"].fillna(0).sum() - gdf["fees"].fillna(0).sum()
+
+        out.append({
+            "group_id": gid,
+            "first_entry": first_entry,
+            "last_exit": last_exit,
+            "legs": int(legs),
+            "total_qty": float(total_qty),
+            "vwap_entry": vwap_entry,
+            "vwap_exit": vwap_exit,
+            "symbol": _mode(gdf["symbol"]) if "symbol" in gdf else None,
+            "side": _mode(gdf["side"]) if "side" in gdf else None,
+            "pnl_net_sum": float(pnl_sum),
+        })
+    return pd.DataFrame(out)
+
 # ---------- UI ----------
 st.title("Trading Performance (EST)")
 tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "Groups", "Guardrails"])
@@ -254,11 +346,11 @@ with tab_upload:
         st.caption("Canonical mapped pairs: " + ", ".join([f"{pair[1]} -> {pair[0]}" for pair in dbg["canonical_mapped_pairs"]]))
         st.caption(f"Row count detected: {dbg['row_count']}")
         if rows:
-            ins, skip, errs, samples, new_ids = _upsert_trades_from_rows(rows)
+            ins, skip, errs, samples, new_ext_ids, new_trade_ids = _upsert_trades_from_rows(rows)
             if ins > 0:
-                st.success(f"Imported {ins} trades (skipped {skip}).")
+                st.success(f"Imported/updated {ins} trades (skipped {skip}).")
             else:
-                st.error(f"Imported {ins} trades (skipped {skip}).")
+                st.error(f"Imported/updated {ins} trades (skipped {skip}).")
             if samples:
                 with st.expander("Sample payloads attempted (first 5)"):
                     st.json(samples)
@@ -267,7 +359,7 @@ with tab_upload:
                     st.json(errs)
             st.cache_data.clear()
             # record which external ids were just inserted/updated so we can preselect them
-            st.session_state.last_imported_external_ids = new_ids
+            st.session_state.last_imported_external_ids = new_ext_ids
             st.session_state.just_imported = True
             st.info("Switch to the Trades tab to tag/group these new trades — they’ll already be selected.")
         else:
@@ -279,7 +371,7 @@ with tab_upload:
 
 # ---- Trades ----
 with tab_trades:
-    st.subheader("Trades")
+    st.subheader("Trades (legs)")
     df = _load_trades()
     if df.empty:
         st.info("No trades yet.")
@@ -308,7 +400,7 @@ with tab_trades:
 
         view_cols = [
             "selected", "Trade ID", "symbol", "side",
-            "Entry (EST)", "Exit (EST)", "qty", "PnL (Net)",
+            "Entry (EST)", "Exit (EST)", "qty", "pnl_gross", "fees", "PnL (Net)",
             "r_multiple", "review_status", "tags"
         ]
         view_cols = [c for c in view_cols if c in df_display.columns]
@@ -319,6 +411,8 @@ with tab_trades:
             hide_index=True,
             column_config={
                 "selected": st.column_config.CheckboxColumn("✓"),
+                "pnl_gross": st.column_config.NumberColumn("PnL (Gross)", step=0.01, format="%.2f"),
+                "fees": st.column_config.NumberColumn("Fees", step=0.01, format="%.2f"),
                 "PnL (Net)": st.column_config.NumberColumn("PnL (Net)", step=0.01, format="%.2f"),
                 "r_multiple": st.column_config.NumberColumn("R Multiple", step=0.01),
                 "review_status": st.column_config.SelectboxColumn("Review Status", options=["unreviewed", "flagged", "reviewed"]),
@@ -413,25 +507,76 @@ with tab_trades:
             st.session_state.last_imported_external_ids = []
             st.rerun()
 
-# ---- Groups (read-only summaries) ----
+# ---- Groups (collapsed + details) ----
 with tab_groups:
-    st.subheader("Groups")
-    groups = _get_groups()
+    st.subheader("Groups (collapsed positions)")
+
+    groups, mem_df = _fetch_all_groups_with_members()
     if not groups:
-        st.info("No groups yet. Create one from the Trades tab.")
+        st.info("No groups yet. Create them from the Trades tab after importing.")
     else:
-        gmap = {f"{g['name']} ({g['id'][:6]})": g["id"] for g in groups}
-        choice = st.selectbox("Choose a group", list(gmap.keys()))
-        gid = gmap[choice]
-        mem = sb.table("tj_trade_group_members").select("trade_id, tj_trades(*)").eq("group_id", gid).execute().data
-        rows = [m["tj_trades"] for m in mem if m.get("tj_trades")]
-        gdf = pd.DataFrame(rows or [])
-        if gdf.empty:
-            st.info("No trades in this group yet.")
+        # COLLAPSED TABLE (one line per group)
+        roll = _rollup_by_group(mem_df)
+        # join names/notes
+        name_map = {g["id"]: g["name"] for g in groups}
+        notes_map = {g["id"]: g.get("notes") for g in groups}
+        if not roll.empty:
+            roll["name"] = roll["group_id"].map(name_map)
+            roll["notes"] = roll["group_id"].map(notes_map)
+
+            # optional day filter
+            c1, c2 = st.columns([1, 4])
+            with c1:
+                day = st.date_input("Filter by day (first entry)", value=None)
+            rshow = roll.copy()
+            if day is not None:
+                # Streamlit returns a date or None; when None, it's a datetime.date(1970,1,1) in some setups — guard with hasattr
+                try:
+                    rshow = rshow[rshow["first_entry"].dt.date == day]
+                except Exception:
+                    pass
+
+            show_cols = [
+                "name","symbol","side","first_entry","last_exit",
+                "legs","total_qty","vwap_entry","vwap_exit","pnl_net_sum","notes"
+            ]
+            show_cols = [c for c in show_cols if c in rshow.columns]
+            st.markdown("**Collapsed (1 row per group)**")
+            st.dataframe(
+                rshow[show_cols].sort_values(["first_entry"], ascending=[False]),
+                use_container_width=True
+            )
+
+            st.divider()
+
+            # DETAILS for a selected group
+            st.markdown("**Group details**")
+            label_to_id = {f"{name_map.get(g['id'],'(unnamed)')} ({g['id'][:6]})": g["id"] for g in groups}
+            choice = st.selectbox("Pick a group", list(label_to_id.keys()))
+            gid = label_to_id[choice]
+
+            gdf = mem_df[mem_df["group_id"] == gid].copy()
+            if gdf.empty:
+                st.info("No member trades in this group.")
+            else:
+                # summary metrics for the chosen group
+                groll = _rollup_by_group(gdf.assign(group_id=gid))
+                if not groll.empty:
+                    row = groll.iloc[0]
+                    m1,m2,m3,m4 = st.columns(4)
+                    m1.metric("Legs", f"{int(row['legs'])}")
+                    m2.metric("Total Qty", f"{row['total_qty']:.0f}")
+                    m3.metric("VWAP Entry", "-" if row['vwap_entry'] is None else f"{row['vwap_entry']:.2f}")
+                    m4.metric("VWAP Exit", "-" if row['vwap_exit'] is None else f"{row['vwap_exit']:.2f}")
+                    st.metric("Net PnL (group)", f"{row['pnl_net_sum']:.2f}")
+
+                trade_cols = ["external_trade_id","symbol","side",
+                              "entry_ts_est","exit_ts_est","qty","entry_px","exit_px",
+                              "pnl_net","r_multiple","review_status"]
+                trade_cols = [c for c in trade_cols if c in gdf.columns]
+                st.dataframe(gdf[trade_cols].sort_values("entry_ts_est"), use_container_width=True)
         else:
-            show_cols = ["external_trade_id","symbol","side","entry_ts_est","exit_ts_est","qty","pnl_net","r_multiple","review_status"]
-            show_cols = [c for c in show_cols if c in gdf.columns]
-            st.dataframe(gdf[show_cols].sort_values("entry_ts_est"), use_container_width=True)
+            st.info("You have groups, but no member trades yet.")
 
 # ---- Guardrails ----
 with tab_guards:
