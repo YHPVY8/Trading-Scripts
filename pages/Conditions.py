@@ -37,93 +37,69 @@ asof_time = None
 if mode == "As-of time snapshot":
     asof_time = st.time_input("As-of time (US/Eastern)", value=dt.time(3, 0))
 
+# =========================
+# Fetch (newest-first) + choose last N trade days like main App
+# =========================
 TABLE = "es_30m"  # adjust if needed
 
-# =========================
-# Fetch
-# =========================
-since = (dt.date.today() - dt.timedelta(days=int(lookback_days))).isoformat()
-q = (
+# Load enough rows to comfortably include the last N trade days
+# 30m bars ~= 48 per 24h. Use a buffer (x1.5) to be safe.
+rows_per_day_guess = 48
+rows_to_load = int(max(2000, trade_days_to_keep * rows_per_day_guess * 1.5))
+
+response = (
     sb.table(TABLE)
       .select("*")
-      .gte("time", f"{since}T00:00:00Z")
-      .order("time", desc=False)
+      .order("time", desc=True)     # NEW: pull newest first (matches your App)
+      .limit(rows_to_load)
+      .execute()
 )
-data = q.execute().data
-if not data:
-    st.warning("No rows returned. Check table name/filters.")
+df = pd.DataFrame(response.data)
+if df.empty:
+    st.error("No data returned from es_30m.")
     st.stop()
 
-df = pd.DataFrame(data)
+# --- Parse time + compute tz-aware trade_day (18:00 ET roll) ---
+df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
+df["time_et"] = df["time"].dt.tz_convert("US/Eastern")
 
-# Required columns
-for col in ["time", "open", "high", "low", "close", "Volume"]:
+et = df["time_et"]
+midnight = et.dt.floor("D")
+roll = (et.dt.hour >= 18).astype("int64")
+df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")   # tz-aware midnight ET of trade-date
+df["trade_date"] = df["trade_day"].dt.date                     # display helper
+
+# --- Pick the most recent N trade days by their latest bar timestamp (DESC), then sort ASC for display ---
+# (Exactly mirrors: order DESC in the query, then ascending for presentation)
+per_day_last_bar = (
+    df.groupby("trade_day")["time_et"]
+      .max()
+      .sort_values(ascending=False)
+)
+recent_trade_days_desc = per_day_last_bar.index[:int(trade_days_to_keep)]
+recent_mask = df["trade_day"].isin(set(recent_trade_days_desc))
+df = df[recent_mask].copy()
+
+# Sort oldest->newest for downstream grouping / tables (like your App)
+df = df.sort_values(["trade_day", "time_et"]).reset_index(drop=True)
+
+# --- Required columns guard (kept after trimming for clarity) ---
+for col in ["open", "high", "low", "close", "Volume"]:
     if col not in df.columns:
         st.error(f"Column '{col}' not found in {TABLE}.")
         st.stop()
 
-# =========================
-# Time parsing & robust trade-day alignment
-#   trade_day: tz-aware midnight ET of the trade date (18:00 roll)
-# =========================
-df["time"] = pd.to_datetime(df["time"], utc=True)
-df["time_et"] = df["time"].dt.tz_convert("US/Eastern")
-
-et = df["time_et"]
-midnight = et.dt.floor("D")                         # midnight ET of calendar day
-roll = (et.dt.hour >= 18).astype("int64")          # 1 if >= 18:00, else 0
-df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")  # tz-aware midnight ET of trade date
-df["trade_date"] = df["trade_day"].dt.date         # display helper
-
-# Sort strictly by trade_day then time_et (both tz-aware)
-df = df.sort_values(["trade_day", "time_et"]).copy()
-
-# =========================
-# Latest bar sanity & expected latest trade_day
-# =========================
-latest_bar_time = df["time_et"].max()
-latest_trade_day_expected = (
-    latest_bar_time.floor("D") + pd.to_timedelta(int(latest_bar_time.hour >= 18), unit="D")
-)
-# We'll assert later that this trade_day exists after filtering
-
-# =========================
-# Sessions (boolean masks on ET clock)
-#   ON : 18:00–09:30
-#   IB : 09:30–10:30
-#   RTH: 09:30–16:00
-# =========================
-t = df["time_et"].dt.time
-df["ON"]  = ((t >= dt.time(18,0)) | (t < dt.time(9,30)))
-df["IB"]  = ((t >= dt.time(9,30)) & (t < dt.time(10,30)))
-df["RTH"] = ((t >= dt.time(9,30)) & (t <= dt.time(16,0)))
-
-# =========================
-# As-of cutoff filtering (trade_day aware)
-# “As-of HH:MM” keeps bars where:
-#   prev_session_start = trade_day - 1 day + 18:00
-#   cutoff_ts          = trade_day + HH:MM
-#   prev_session_start <= time_et <= cutoff_ts
-# =========================
-if mode == "As-of time snapshot":
-    cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
-    cutoff_ts = df["trade_day"] + pd.to_timedelta(cut_seconds, unit="s")
-    prev_start = (df["trade_day"] - pd.Timedelta(days=1)) + pd.Timedelta(hours=18)
-    mask = (df["time_et"] >= prev_start) & (df["time_et"] <= cutoff_ts)
-    df = df[mask].copy()
-
-# =========================
-# Data health (debug)
-# =========================
+# --- Data health (sanity) ---
 with st.expander("Data health (debug)"):
     st.write({
-        "loaded_rows": int(len(df)),
-        "min_time_et": str(df["time_et"].min()) if len(df) else None,
-        "max_time_et": str(df["time_et"].max()) if len(df) else None,
-        "min_trade_day": str(df["trade_day"].min()) if len(df) else None,
-        "max_trade_day": str(df["trade_day"].max()) if len(df) else None,
-        "expected_latest_trade_day_from_raw": str(latest_trade_day_expected),
-        "unique_trade_days": int(df["trade_day"].nunique()),
+        "rows_loaded_desc": rows_to_load,
+        "rows_after_trim": len(df),
+        "min_time_et": str(df["time_et"].min()),
+        "max_time_et": str(df["time_et"].max()),
+        "first_trade_day": str(df["trade_day"].min()),
+        "last_trade_day": str(df["trade_day"].max()),
+        "unique_trade_days_kept": int(df["trade_day"].nunique()),
+        "kept_trade_days_desc": [str(d) for d in recent_trade_days_desc.tolist()],
     })
 
 # =========================
