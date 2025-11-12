@@ -63,14 +63,25 @@ if df.empty:
 df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
 df["time_et"] = df["time"].dt.tz_convert("US/Eastern")
 
+# Keep these BEFORE any filtering so they reflect the raw latest
+latest_bar_time = df["time_et"].max()
+latest_trade_day_expected = (
+    latest_bar_time.floor("D") + pd.to_timedelta(int(latest_bar_time.hour >= 18), unit="D")
+)
+
 et = df["time_et"]
 midnight = et.dt.floor("D")
 roll = (et.dt.hour >= 18).astype("int64")
 df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")   # tz-aware midnight ET of trade-date
 df["trade_date"] = df["trade_day"].dt.date                     # display helper
 
+# --- Create session flags BEFORE any functions use them ---
+t = df["time_et"].dt.time
+df["ON"]  = ((t >= dt.time(18,0)) | (t < dt.time(9,30)))
+df["IB"]  = ((t >= dt.time(9,30)) & (t < dt.time(10,30)))
+df["RTH"] = ((t >= dt.time(9,30)) & (t <= dt.time(16,0)))
+
 # --- Pick the most recent N trade days by their latest bar timestamp (DESC), then sort ASC for display ---
-# (Exactly mirrors: order DESC in the query, then ascending for presentation)
 per_day_last_bar = (
     df.groupby("trade_day")["time_et"]
       .max()
@@ -82,6 +93,20 @@ df = df[recent_mask].copy()
 
 # Sort oldest->newest for downstream grouping / tables (like your App)
 df = df.sort_values(["trade_day", "time_et"]).reset_index(drop=True)
+
+# =========================
+# Optional: As-of cutoff filtering (trade_day aware)
+# “As-of HH:MM” keeps bars where:
+#   prev_session_start = trade_day - 1 day + 18:00
+#   cutoff_ts          = trade_day + HH:MM
+#   prev_session_start <= time_et <= cutoff_ts
+# =========================
+if mode == "As-of time snapshot":
+    cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
+    cutoff_ts = df["trade_day"] + pd.to_timedelta(cut_seconds, unit="s")
+    prev_start = (df["trade_day"] - pd.Timedelta(days=1)) + pd.Timedelta(hours=18)
+    mask_asof = (df["time_et"] >= prev_start) & (df["time_et"] <= cutoff_ts)
+    df = df[mask_asof].copy()
 
 # --- Required columns guard (kept after trimming for clarity) ---
 for col in ["open", "high", "low", "close", "Volume"]:
@@ -100,6 +125,7 @@ with st.expander("Data health (debug)"):
         "last_trade_day": str(df["trade_day"].max()),
         "unique_trade_days_kept": int(df["trade_day"].nunique()),
         "kept_trade_days_desc": [str(d) for d in recent_trade_days_desc.tolist()],
+        "expected_latest_trade_day_from_raw": str(latest_trade_day_expected),
     })
 
 # =========================
@@ -172,6 +198,9 @@ last_rows["cum_vol_pct_vs_tw"] = last_rows["cum_vol_vs_tw"] / last_rows["cum_vol
 
 # % pMid hit by session (within-session prev-bar midpoint)
 def session_pmid_percent(scope: pd.DataFrame, label: str) -> pd.DataFrame:
+    # robust guard: if label column missing, return empty frame
+    if label not in scope.columns:
+        return pd.DataFrame(columns=["trade_day", f"{label}_pMid_hit_pct"])
     sub = scope[scope[label]].copy()
     if sub.empty:
         return pd.DataFrame(columns=["trade_day", f"{label}_pMid_hit_pct"])
@@ -228,7 +257,7 @@ if latest_trade_day_expected not in daily["trade_day"].values:
         "Latest trade day derived from the raw table is missing after filters.\n"
         f"Latest bar ET: {latest_bar_time}\n"
         f"Expected trade_day (ET midnight): {latest_trade_day_expected}\n"
-        "Tip: widen 'Load last N calendar days' or check As-of cutoff."
+        "Tip: widen 'Load last N calendar days', increase 'Trade days to keep', or adjust As-of cutoff."
     )
 
 if daily.empty:
@@ -340,5 +369,5 @@ st.caption(f"""
 **Alignment guards in place**
 - Latest bar ET: **{latest_bar_time}**
 - Expected latest trade_day (ET midnight, 18:00 roll): **{latest_trade_day_expected}**
-- Page groups by **tz-aware `trade_day`**, trims by the most recent trade days **after** all filters, and warns if the expected latest day is missing.
+- Page groups by **tz-aware `trade_day`**, selects the most recent trade days from a **DESC query**, then re-sorts ASC for display.
 """)
