@@ -42,15 +42,13 @@ if mode == "As-of time snapshot":
 # =========================
 TABLE = "es_30m"  # adjust if needed
 
-# Load enough rows to comfortably include the last N trade days
-# 30m bars ~= 48 per 24h. Use a buffer (x1.5) to be safe.
-rows_per_day_guess = 48
+rows_per_day_guess = 48  # 30m bars
 rows_to_load = int(max(2000, trade_days_to_keep * rows_per_day_guess * 1.5))
 
 response = (
     sb.table(TABLE)
       .select("*")
-      .order("time", desc=True)     # NEW: pull newest first (matches your App)
+      .order("time", desc=True)   # newest first (matches your main App)
       .limit(rows_to_load)
       .execute()
 )
@@ -72,16 +70,16 @@ latest_trade_day_expected = (
 et = df["time_et"]
 midnight = et.dt.floor("D")
 roll = (et.dt.hour >= 18).astype("int64")
-df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")   # tz-aware midnight ET of trade-date
-df["trade_date"] = df["trade_day"].dt.date                     # display helper
+df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")  # tz-aware midnight ET of trade-date
+df["trade_date"] = df["trade_day"].dt.date
 
-# --- Create session flags BEFORE any functions use them ---
+# --- Create session flags (needed later) ---
 t = df["time_et"].dt.time
 df["ON"]  = ((t >= dt.time(18,0)) | (t < dt.time(9,30)))
 df["IB"]  = ((t >= dt.time(9,30)) & (t < dt.time(10,30)))
 df["RTH"] = ((t >= dt.time(9,30)) & (t <= dt.time(16,0)))
 
-# --- Pick the most recent N trade days by their latest bar timestamp (DESC), then sort ASC for display ---
+# --- Pick the most recent N trade days by latest bar timestamp (DESC), then sort ASC for display ---
 per_day_last_bar = (
     df.groupby("trade_day")["time_et"]
       .max()
@@ -95,11 +93,56 @@ df = df[recent_mask].copy()
 df = df.sort_values(["trade_day", "time_et"]).reset_index(drop=True)
 
 # =========================
+# Backfill: ensure the latest trade_day has ALL bars from 18:00 ET
+# (prevents wrong lows/highs/cum-vol when DESC limit clipped early ON bars)
+# =========================
+latest_td = df["trade_day"].max()
+latest_day_df = df[df["trade_day"] == latest_td]
+if not latest_day_df.empty:
+    earliest_bar_et = latest_day_df["time_et"].min()
+
+    # Start of session = previous calendar day 18:00 ET = trade_day - 6h
+    latest_start_et = latest_td - pd.Timedelta(hours=6)
+    latest_end_et   = latest_td + pd.Timedelta(hours=24)  # generous cap
+
+    # If first bar we have begins after 18:00 ET, fetch the missing early bars
+    if earliest_bar_et > latest_start_et:
+        start_iso = latest_start_et.tz_convert("UTC").isoformat()
+        end_iso   = latest_end_et.tz_convert("UTC").isoformat()
+        backfill_resp = (
+            sb.table(TABLE)
+              .select("*")
+              .gte("time", start_iso)
+              .lt("time", end_iso)
+              .order("time", desc=False)
+              .execute()
+        )
+        missing_df = pd.DataFrame(backfill_resp.data)
+        if not missing_df.empty:
+            missing_df["time"] = pd.to_datetime(missing_df["time"], utc=True, errors="coerce")
+            missing_df["time_et"] = missing_df["time"].dt.tz_convert("US/Eastern")
+
+            et2 = missing_df["time_et"]
+            midnight2 = et2.dt.floor("D")
+            roll2 = (et2.dt.hour >= 18).astype("int64")
+            missing_df["trade_day"] = midnight2 + pd.to_timedelta(roll2, unit="D")
+            missing_df["trade_date"] = missing_df["trade_day"].dt.date
+
+            # add the flags we use later
+            tt = missing_df["time_et"].dt.time
+            missing_df["ON"]  = ((tt >= dt.time(18,0)) | (tt < dt.time(9,30)))
+            missing_df["IB"]  = ((tt >= dt.time(9,30)) & (tt < dt.time(10,30)))
+            missing_df["RTH"] = ((tt >= dt.time(9,30)) & (tt <= dt.time(16,0)))
+
+            # keep only rows that aren't already present
+            missing_df = missing_df[~missing_df["time"].isin(df["time"])]
+            if not missing_df.empty:
+                df = pd.concat([df, missing_df], ignore_index=True)
+                df = df.sort_values(["trade_day","time_et"]).reset_index(drop=True)
+
+# =========================
 # Optional: As-of cutoff filtering (trade_day aware)
-# “As-of HH:MM” keeps bars where:
-#   prev_session_start = trade_day - 1 day + 18:00
-#   cutoff_ts          = trade_day + HH:MM
-#   prev_session_start <= time_et <= cutoff_ts
+# Keeps bars: (trade_day-1 @ 18:00) → (trade_day @ HH:MM)
 # =========================
 if mode == "As-of time snapshot":
     cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
@@ -108,29 +151,27 @@ if mode == "As-of time snapshot":
     mask_asof = (df["time_et"] >= prev_start) & (df["time_et"] <= cutoff_ts)
     df = df[mask_asof].copy()
 
-# --- Required columns guard (kept after trimming for clarity) ---
+# --- Required columns guard ---
 for col in ["open", "high", "low", "close", "Volume"]:
     if col not in df.columns:
         st.error(f"Column '{col}' not found in {TABLE}.")
         st.stop()
 
-# --- Data health (sanity) ---
-with st.expander("Data health (debug)"):
-    st.write({
-        "rows_loaded_desc": rows_to_load,
-        "rows_after_trim": len(df),
-        "min_time_et": str(df["time_et"].min()),
-        "max_time_et": str(df["time_et"].max()),
-        "first_trade_day": str(df["trade_day"].min()),
-        "last_trade_day": str(df["trade_day"].max()),
-        "unique_trade_days_kept": int(df["trade_day"].nunique()),
-        "kept_trade_days_desc": [str(d) for d in recent_trade_days_desc.tolist()],
-        "expected_latest_trade_day_from_raw": str(latest_trade_day_expected),
-    })
+# =========================
+# Per-session features (reset EACH trade_day at 18:00 ET)
+# =========================
+# Cumulative volume (session)
+df["cum_vol"] = df.groupby("trade_day")["Volume"].cumsum()
 
-# =========================
-# Prior-day extrema by trade_day (for pHi/pLo)
-# =========================
+# Session high/low that ratchet through the session
+df["session_high"] = df.groupby("trade_day")["high"].cummax()
+df["session_low"]  = df.groupby("trade_day")["low"].cummin()
+
+# Deltas used for averages
+df["hi_op"]  = df["high"] - df["open"]
+df["op_lo"]  = df["open"] - df["low"]
+
+# Prior-day extrema for pHi/pLo deltas (based on full-day extrema)
 daily_hi_lo = (
     df.groupby("trade_day")
       .agg(day_high=("high","max"), day_low=("low","min"))
@@ -140,25 +181,15 @@ daily_hi_lo = (
 daily_hi_lo["pHi"] = daily_hi_lo["day_high"].shift(1)
 daily_hi_lo["pLo"] = daily_hi_lo["day_low"].shift(1)
 df = df.merge(daily_hi_lo[["trade_day","pHi","pLo"]], on="trade_day", how="left")
-
-# Bar-level deltas
-df["hi_op"] = df["high"] - df["open"]
-df["op_lo"] = df["open"] - df["low"]
 df["hi_pHi"] = df["high"] - df["pHi"]
-df["lo_pLo"] = df["low"] - df["pLo"]
+df["lo_pLo"] = df["low"]  - df["pLo"]
 
-# =========================
-# Intra-day bar index + cumulative volume (since 18:00 roll)
-# =========================
-df["bar_n"] = df.groupby("trade_day").cumcount()
-df["cum_vol"] = df.groupby("trade_day")["Volume"].cumsum()
-
-# Helper
+# Helper: trailing mean (shifted to avoid look-ahead)
 def trailing_mean(s: pd.Series, n: int) -> pd.Series:
-    return s.rolling(n).mean().shift(1)
+    return s.rolling(int(n)).mean().shift(1)
 
 # =========================
-# Aggregate per trade_day (respecting current filter)
+# Aggregate per trade_day (respects current filter/as-of)
 # =========================
 def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
     first_last = scope.groupby("trade_day").agg(
@@ -168,8 +199,12 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
     hilo = scope.groupby("trade_day").agg(
         day_high=("high","max"),
         day_low=("low","min"),
+        day_range=("high", lambda x: x.max()) - scope.groupby("trade_day")["low"].min(),
         day_volume=("Volume","sum"),
-        bars_in_day=("time","count")
+        bars_in_day=("time","count"),
+        last_session_high=("session_high","last"),
+        last_session_low=("session_low","last"),
+        last_cum_vol=("cum_vol","last"),
     )
     perbar = scope.groupby("trade_day").agg(
         avg_hi_op=("hi_op","mean"),
@@ -178,27 +213,36 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
         avg_lo_pLo=("lo_pLo","mean"),
     )
     out = first_last.join(hilo).join(perbar).reset_index().sort_values("trade_day")
-    out["day_range"] = out["day_high"] - out["day_low"]
     out["trade_date"] = out["trade_day"].dt.date
     return out
 
-daily_all = agg_daily(df)
+daily = agg_daily(df)
 
-# Cum volume at "same cutoff" for each day
+# Cum volume at EXACT SAME CUTOFF per day (already captured as last_cum_vol)
+# but keep the explicit "cutoff_n" approach to be robust if future filters change
+df["bar_n"] = df.groupby("trade_day").cumcount()
 cutoff_n = df.groupby("trade_day")["bar_n"].max().rename("cutoff_n")
 last_rows = (
     df.merge(cutoff_n, on="trade_day")
-      .query("bar_n == cutoff_n")[["trade_day","cum_vol"]]
+      .query("bar_n == cutoff_n")[["trade_day","cum_vol","session_high","session_low"]]
       .sort_values("trade_day")
-      .rename(columns={"cum_vol":"cum_vol_at_cutoff"})
+      .rename(columns={
+          "cum_vol":"cum_vol_at_cutoff",
+          "session_high":"session_high_at_cutoff",
+          "session_low":"session_low_at_cutoff"
+      })
 )
-last_rows["cum_vol_tw_avg"] = trailing_mean(last_rows["cum_vol_at_cutoff"], int(trailing_window))
-last_rows["cum_vol_vs_tw"] = last_rows["cum_vol_at_cutoff"] - last_rows["cum_vol_tw_avg"]
-last_rows["cum_vol_pct_vs_tw"] = last_rows["cum_vol_vs_tw"] / last_rows["cum_vol_tw_avg"]
 
-# % pMid hit by session (within-session prev-bar midpoint)
+daily = daily.merge(last_rows, on="trade_day", how="left")
+
+# Trailing comparisons (exclude current day via shift inside trailing_mean)
+for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
+    if col in daily.columns:
+        daily[f"{col}_tw_avg"] = trailing_mean(daily[col], trailing_window)
+        daily[f"{col}_pct_vs_tw"] = (daily[col] - daily[f"{col}_tw_avg"]) / daily[f"{col}_tw_avg"]
+
+# % pMid hit by session (prev-bar midpoint within the session)
 def session_pmid_percent(scope: pd.DataFrame, label: str) -> pd.DataFrame:
-    # robust guard: if label column missing, return empty frame
     if label not in scope.columns:
         return pd.DataFrame(columns=["trade_day", f"{label}_pMid_hit_pct"])
     sub = scope[scope[label]].copy()
@@ -218,36 +262,18 @@ on_hit  = session_pmid_percent(df, "ON")
 ib_hit  = session_pmid_percent(df, "IB")
 rth_hit = session_pmid_percent(df, "RTH")
 
-# Build final daily table
 daily = (
-    daily_all.merge(last_rows, on="trade_day", how="left")
-             .merge(on_hit,  on="trade_day", how="left")
-             .merge(ib_hit,  on="trade_day", how="left")
-             .merge(rth_hit, on="trade_day", how="left")
-             .sort_values("trade_day")
+    daily.merge(on_hit,  on="trade_day", how="left")
+         .merge(ib_hit,  on="trade_day", how="left")
+         .merge(rth_hit, on="trade_day", how="left")
+         .sort_values("trade_day")
 )
 
-# Classic trailing metrics (full-day style; still respects as-of filter because daily_all did)
-for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
-    if col in daily.columns:
-        daily[f"{col}_tw_avg"] = trailing_mean(daily[col], int(trailing_window))
-        daily[f"{col}_pct_vs_tw"] = (daily[col] - daily[f"{col}_tw_avg"]) / daily[f"{col}_tw_avg"]
-
-# Trailing for pMid% (aligned by current filter)
 for ses in ["ON","IB","RTH"]:
     col = f"{ses}_pMid_hit_pct"
     if col in daily.columns:
-        daily[f"{col}_tw_avg"] = trailing_mean(daily[col], int(trailing_window))
+        daily[f"{col}_tw_avg"] = trailing_mean(daily[col], trailing_window)
         daily[f"{col}_pct_vs_tw"] = daily[col] - daily[f"{col}_tw_avg"]
-
-# =========================
-# Trim to most recent N trade days (based on trade_day, not raw time)
-# =========================
-daily = daily.sort_values("trade_day")
-unique_days = pd.Series(daily["trade_day"].unique())
-if len(unique_days) > int(trade_days_to_keep):
-    keep = set(unique_days.iloc[-int(trade_days_to_keep):])
-    daily = daily[daily["trade_day"].isin(keep)].copy().sort_values("trade_day")
 
 # =========================
 # Assert latest trade_day presence
@@ -261,7 +287,7 @@ if latest_trade_day_expected not in daily["trade_day"].values:
     )
 
 if daily.empty:
-    st.warning("No trade days after trimming—expand your lookback or lower 'Trade days to keep'.")
+    st.warning("No trade days after processing—adjust controls.")
     st.stop()
 
 # =========================
@@ -279,15 +305,11 @@ k1.metric(f"Range vs {trailing_window}d",
           None if pd.isna(row.get('day_range_pct_vs_tw')) else f"{row['day_range_pct_vs_tw']*100:+.1f}%")
 k2.metric(f"Cum Vol vs {trailing_window}d",
           f"{row.get('cum_vol_at_cutoff', np.nan):,.0f}" if pd.notna(row.get('cum_vol_at_cutoff')) else "—",
-          None if pd.isna(row.get('cum_vol_pct_vs_tw')) else f"{row['cum_vol_pct_vs_tw']*100:+.1f}%")
-k3.metric(f"Avg(Hi-Op) vs {trailing_window}d",
-          f"{row.get('avg_hi_op', np.nan):.2f}" if pd.notna(row.get('avg_hi_op')) else "—",
-          None if pd.isna(row.get('avg_hi_op_pct_vs_tw')) else f"{row['avg_hi_op_pct_vs_tw']*100:+.1f}%")
-k4.metric(f"Avg(Op-Lo) vs {trailing_window}d",
-          f"{row.get('avg_op_lo', np.nan):.2f}" if pd.notna(row.get('avg_op_lo')) else "—",
-          None if pd.isna(row.get('avg_op_lo_pct_vs_tw')) else f"{row['avg_op_lo_pct_vs_tw']*100:+.1f}%")
+          None if pd.isna(row.get('day_volume_tw_avg')) else None)
+k3.metric(f"Session High (cutoff)", f"{row.get('session_high_at_cutoff', np.nan):.2f}" if pd.notna(row.get('session_high_at_cutoff')) else "—")
+k4.metric(f"Session Low (cutoff)",  f"{row.get('session_low_at_cutoff',  np.nan):.2f}" if pd.notna(row.get('session_low_at_cutoff'))  else "—")
 
-st.caption("Cum Vol uses cumulative volume up to the current cutoff (Full day = last bar). Trailing averages exclude the current day.")
+st.caption("Session metrics reset at 18:00 ET. Cumulative volume and session high/low are computed from 18:00 ET forward, using all available bars (backfilled if needed). Trailing averages exclude the current day.")
 
 # =========================
 # Table (last N trade days)
@@ -298,41 +320,33 @@ show_days = st.slider("Show last N trade days", 10, max_slider, min(30, max_slid
 
 cols = [
     "trade_date",
-    "day_open","day_high","day_low","day_close",
-    "day_range","day_range_tw_avg","day_range_pct_vs_tw",
-    "cum_vol_at_cutoff","cum_vol_tw_avg","cum_vol_pct_vs_tw",
+    "day_open","day_high","day_low","day_close","day_range",
+    "session_high_at_cutoff","session_low_at_cutoff",
+    "cum_vol_at_cutoff","day_volume","day_volume_tw_avg",
     "avg_hi_op","avg_hi_op_tw_avg","avg_hi_op_pct_vs_tw",
     "avg_op_lo","avg_op_lo_tw_avg","avg_op_lo_pct_vs_tw",
     "avg_hi_pHi","avg_hi_pHi_tw_avg",
     "avg_lo_pLo","avg_lo_pLo_tw_avg",
-    "ON_pMid_hit_pct","ON_pMid_hit_pct_tw_avg","ON_pMid_hit_pct_pct_vs_tw",  # placeholder
-    "IB_pMid_hit_pct","IB_pMid_hit_pct_tw_avg","IB_pMid_hit_pct_pct_vs_tw",  # placeholder
-    "RTH_pMid_hit_pct","RTH_pMid_hit_pct_tw_avg","RTH_pMid_hit_pct_pct_vs_tw",# placeholder
+    "ON_pMid_hit_pct","ON_pMid_hit_pct_tw_avg",
+    "IB_pMid_hit_pct","IB_pMid_hit_pct_tw_avg",
+    "RTH_pMid_hit_pct","RTH_pMid_hit_pct_tw_avg",
     "bars_in_day",
 ]
-# correct placeholder column names
-for ses in ["ON","IB","RTH"]:
-    real = f"{ses}_pMid_hit_pct_vs_tw"
-    ph = f"{ses}_pMid_hit_pct_pct_vs_tw"
-    if real in daily.columns and ph in cols:
-        cols[cols.index(ph)] = real
-
 existing = [c for c in cols if c in daily.columns]
 tbl = daily[existing].tail(int(show_days)).copy()
 
 labels = {
     "trade_date":"Trade Date",
-    "day_open":"Open","day_high":"High","day_low":"Low","day_close":"Close",
-    "day_range":"Range","day_range_tw_avg":f"Range {trailing_window}d","day_range_pct_vs_tw":f"Range vs {trailing_window}d",
-    "cum_vol_at_cutoff":"Cum Vol (cutoff)","cum_vol_tw_avg":f"Cum Vol {trailing_window}d (cutoff)",
-    "cum_vol_pct_vs_tw":f"Cum Vol vs {trailing_window}d",
+    "day_open":"Open","day_high":"High","day_low":"Low","day_close":"Close","day_range":"Range",
+    "session_high_at_cutoff":"Session High (cutoff)","session_low_at_cutoff":"Session Low (cutoff)",
+    "cum_vol_at_cutoff":"Cum Vol (cutoff)","day_volume":"Vol (day)","day_volume_tw_avg":f"Vol {trailing_window}d",
     "avg_hi_op":"Avg(Hi-Op)","avg_hi_op_tw_avg":f"Avg(Hi-Op) {trailing_window}d","avg_hi_op_pct_vs_tw":f"Avg(Hi-Op) vs {trailing_window}d",
     "avg_op_lo":"Avg(Op-Lo)","avg_op_lo_tw_avg":f"Avg(Op-Lo) {trailing_window}d","avg_op_lo_pct_vs_tw":f"Avg(Op-Lo) vs {trailing_window}d",
     "avg_hi_pHi":"Avg(Hi-pHi)","avg_hi_pHi_tw_avg":f"Avg(Hi-pHi) {trailing_window}d",
     "avg_lo_pLo":"Avg(Lo-pLo)","avg_lo_pLo_tw_avg":f"Avg(Lo-pLo) {trailing_window}d",
-    "ON_pMid_hit_pct":"ON % pMid Hit","ON_pMid_hit_pct_tw_avg":f"ON % pMid Hit {trailing_window}d","ON_pMid_hit_pct_vs_tw":"ON % pMid Hit vs tw",
-    "IB_pMid_hit_pct":"IB % pMid Hit","IB_pMid_hit_pct_tw_avg":f"IB % pMid Hit {trailing_window}d","IB_pMid_hit_pct_vs_tw":"IB % pMid Hit vs tw",
-    "RTH_pMid_hit_pct":"RTH % pMid Hit","RTH_pMid_hit_pct_tw_avg":f"RTH % pMid Hit {trailing_window}d","RTH_pMid_hit_pct_vs_tw":"RTH % pMid Hit vs tw",
+    "ON_pMid_hit_pct":"ON % pMid Hit","ON_pMid_hit_pct_tw_avg":f"ON % pMid Hit {trailing_window}d",
+    "IB_pMid_hit_pct":"IB % pMid Hit","IB_pMid_hit_pct_tw_avg":f"IB % pMid Hit {trailing_window}d",
+    "RTH_pMid_hit_pct":"RTH % pMid Hit","RTH_pMid_hit_pct_tw_avg":f"RTH % pMid Hit {trailing_window}d",
     "bars_in_day":"Bars"
 }
 tbl = tbl.rename(columns=labels)
@@ -342,21 +356,23 @@ fmt = {}
 for name in tbl.columns:
     if name == "Trade Date":
         continue
-    if "Vol" in name:
+    if "Vol" in name or "Vol (" in name:
         fmt[name] = "{:,.0f}"
     elif "% pMid Hit" in name:
         fmt[name] = "{:.1%}"
-    elif "vs" in name and "% pMid Hit" not in name and "Vol" not in name:
+    elif "vs" in name:
         fmt[name] = "{:,.2f}"
-    elif name == "Bars":
+    elif name in ["Bars"]:
         fmt[name] = "{:,.0f}"
     else:
         fmt[name] = "{:,.2f}"
 
 def color_pos_neg(val):
     if pd.isna(val): return ""
-    try: v = float(val)
-    except: return ""
+    try:
+        v = float(val)
+    except Exception:
+        return ""
     return f"color: {'#16a34a' if v>0 else ('#dc2626' if v<0 else '#111827')};"
 
 vs_cols = [c for c in tbl.columns if "vs" in c and "% pMid Hit" not in c]
@@ -365,9 +381,10 @@ styled = tbl.style.format(fmt).applymap(color_pos_neg, subset=vs_cols).set_prope
 )
 st.dataframe(styled, use_container_width=True)
 
-st.caption(f"""
-**Alignment guards in place**
-- Latest bar ET: **{latest_bar_time}**
-- Expected latest trade_day (ET midnight, 18:00 roll): **{latest_trade_day_expected}**
-- Page groups by **tz-aware `trade_day`**, selects the most recent trade days from a **DESC query**, then re-sorts ASC for display.
-""")
+with st.expander("Data health (debug)"):
+    st.write({
+        "latest_bar_time_et": str(latest_bar_time),
+        "expected_latest_trade_day": str(latest_trade_day_expected),
+        "kept_trade_days_desc": [str(d) for d in recent_trade_days_desc.tolist()],
+        "rows_total": int(len(df)),
+    })
