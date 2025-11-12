@@ -102,8 +102,8 @@ if not latest_day_df.empty:
     earliest_bar_et = latest_day_df["time_et"].min()
 
     # Start of session = previous calendar day 18:00 ET = trade_day - 6h
-    latest_start_et = latest_td - pd.Timedelta(hours=6)
-    latest_end_et   = latest_td + pd.Timedelta(hours=24)  # generous cap
+    latest_start_et = latest_td - pd.Timedelta(hours=6)     # 18:00 ET of prior calendar day
+    latest_end_et   = latest_td + pd.Timedelta(hours=24)    # generous cap
 
     # If first bar we have begins after 18:00 ET, fetch the missing early bars
     if earliest_bar_et > latest_start_et:
@@ -192,48 +192,49 @@ def trailing_mean(s: pd.Series, n: int) -> pd.Series:
 # Aggregate per trade_day (respects current filter/as-of)
 # =========================
 def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
+    # Basic opens/closes
     first_last = scope.groupby("trade_day").agg(
         day_open=("open","first"),
         day_close=("close","last"),
     )
+
+    # Highs/Lows/Volume + bar count
     hilo = scope.groupby("trade_day").agg(
         day_high=("high","max"),
         day_low=("low","min"),
-        day_range=("high", lambda x: x.max()) - scope.groupby("trade_day")["low"].min(),
         day_volume=("Volume","sum"),
-        bars_in_day=("time","count"),
-        last_session_high=("session_high","last"),
-        last_session_low=("session_low","last"),
-        last_cum_vol=("cum_vol","last"),
     )
+    bars = scope.groupby("trade_day").size().rename("bars_in_day")
+
+    # Per-bar averages
     perbar = scope.groupby("trade_day").agg(
         avg_hi_op=("hi_op","mean"),
         avg_op_lo=("op_lo","mean"),
         avg_hi_pHi=("hi_pHi","mean"),
         avg_lo_pLo=("lo_pLo","mean"),
     )
-    out = first_last.join(hilo).join(perbar).reset_index().sort_values("trade_day")
+
+    # Last values at the current cutoff
+    lasts = scope.groupby("trade_day").agg(
+        session_high_at_cutoff=("session_high","last"),
+        session_low_at_cutoff=("session_low","last"),
+        cum_vol_at_cutoff=("cum_vol","last"),
+    )
+
+    # Compose
+    out = (
+        first_last.join(hilo)
+                  .join(bars)
+                  .join(perbar)
+                  .join(lasts)
+                  .reset_index()
+                  .sort_values("trade_day")
+    )
+    out["day_range"]  = out["day_high"] - out["day_low"]
     out["trade_date"] = out["trade_day"].dt.date
     return out
 
 daily = agg_daily(df)
-
-# Cum volume at EXACT SAME CUTOFF per day (already captured as last_cum_vol)
-# but keep the explicit "cutoff_n" approach to be robust if future filters change
-df["bar_n"] = df.groupby("trade_day").cumcount()
-cutoff_n = df.groupby("trade_day")["bar_n"].max().rename("cutoff_n")
-last_rows = (
-    df.merge(cutoff_n, on="trade_day")
-      .query("bar_n == cutoff_n")[["trade_day","cum_vol","session_high","session_low"]]
-      .sort_values("trade_day")
-      .rename(columns={
-          "cum_vol":"cum_vol_at_cutoff",
-          "session_high":"session_high_at_cutoff",
-          "session_low":"session_low_at_cutoff"
-      })
-)
-
-daily = daily.merge(last_rows, on="trade_day", how="left")
 
 # Trailing comparisons (exclude current day via shift inside trailing_mean)
 for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
@@ -305,9 +306,11 @@ k1.metric(f"Range vs {trailing_window}d",
           None if pd.isna(row.get('day_range_pct_vs_tw')) else f"{row['day_range_pct_vs_tw']*100:+.1f}%")
 k2.metric(f"Cum Vol vs {trailing_window}d",
           f"{row.get('cum_vol_at_cutoff', np.nan):,.0f}" if pd.notna(row.get('cum_vol_at_cutoff')) else "—",
-          None if pd.isna(row.get('day_volume_tw_avg')) else None)
-k3.metric(f"Session High (cutoff)", f"{row.get('session_high_at_cutoff', np.nan):.2f}" if pd.notna(row.get('session_high_at_cutoff')) else "—")
-k4.metric(f"Session Low (cutoff)",  f"{row.get('session_low_at_cutoff',  np.nan):.2f}" if pd.notna(row.get('session_low_at_cutoff'))  else "—")
+          None)
+k3.metric("Session High (cutoff)",
+          f"{row.get('session_high_at_cutoff', np.nan):.2f}" if pd.notna(row.get('session_high_at_cutoff')) else "—")
+k4.metric("Session Low (cutoff)",
+          f"{row.get('session_low_at_cutoff',  np.nan):.2f}" if pd.notna(row.get('session_low_at_cutoff'))  else "—")
 
 st.caption("Session metrics reset at 18:00 ET. Cumulative volume and session high/low are computed from 18:00 ET forward, using all available bars (backfilled if needed). Trailing averages exclude the current day.")
 
