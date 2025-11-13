@@ -73,7 +73,7 @@ roll = (et.dt.hour >= 18).astype("int64")
 df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")  # tz-aware midnight ET of trade-date
 df["trade_date"] = df["trade_day"].dt.date
 
-# --- Create session flags (needed later) ---
+# --- Create session flags (needed later for pMid stats) ---
 t = df["time_et"].dt.time
 df["ON"]  = ((t >= dt.time(18,0)) | (t < dt.time(9,30)))
 df["IB"]  = ((t >= dt.time(9,30)) & (t < dt.time(10,30)))
@@ -158,40 +158,28 @@ for col in ["open", "high", "low", "close", "Volume"]:
         st.stop()
 
 # =========================
-# Per-session features (reset EACH trade_day at 18:00 ET)
+# Join enriched 30m data for session-level features
 # =========================
-# Cumulative volume (session)
-df["cum_vol"] = df.groupby("trade_day")["Volume"].cumsum()
+enriched_cols = [
+    "time",
+    "cum_vol",
+    "session_high",
+    "session_low",
+    "hi_op",
+    "op_lo",
+    "pHi",
+    "pLo",
+    "hi_phi",
+    "lo_plo",
+]
 
-# Session high/low that ratchet through the session
-df["session_high"] = df.groupby("trade_day")["high"].cummax()
-df["session_low"]  = df.groupby("trade_day")["low"].cummin()
-
-# Deltas used for averages
-df["hi_op"]  = df["high"] - df["open"]
-df["op_lo"]  = df["open"] - df["low"]
-
-# Prior-day extrema for pHi/pLo deltas (based on full-day extrema)
-daily_hi_lo = (
-    df.groupby("trade_day")
-      .agg(day_high=("high","max"), day_low=("low","min"))
-      .sort_index()
-      .reset_index()
-)
-daily_hi_lo["pHi"] = daily_hi_lo["day_high"].shift(1)
-daily_hi_lo["pLo"] = daily_hi_lo["day_low"].shift(1)
-df = df.merge(daily_hi_lo[["trade_day","pHi","pLo"]], on="trade_day", how="left")
-df["hi_pHi"] = df["high"] - df["pHi"]
-df["lo_pLo"] = df["low"]  - df["pLo"]
-
-# ✅ NEW: pull hi_phi / lo_plo from es_30m_enriched and override hi_pHi / lo_pLo
 try:
     min_time = df["time"].min()
     max_time = df["time"].max()
     if pd.notna(min_time) and pd.notna(max_time):
         enr_resp = (
             sb.table("es_30m_enriched")
-              .select("time,hi_phi,lo_plo")
+              .select(",".join(enriched_cols))
               .gte("time", min_time.isoformat())
               .lte("time", max_time.isoformat())
               .execute()
@@ -199,14 +187,86 @@ try:
         enr_df = pd.DataFrame(enr_resp.data)
         if not enr_df.empty:
             enr_df["time"] = pd.to_datetime(enr_df["time"], utc=True, errors="coerce")
-            df = df.merge(enr_df, on="time", how="left")
-            # override with enriched values where present
-            if "hi_phi" in df.columns:
-                df["hi_pHi"] = df["hi_phi"]
-            if "lo_plo" in df.columns:
-                df["lo_pLo"] = df["lo_plo"]
+            enr_df = enr_df.dropna(subset=["time"])
+            # Drop any duplicate times in enriched just in case
+            enr_df = (
+                enr_df.sort_values("time")
+                      .drop_duplicates(subset=["time"], keep="last")
+            )
+            df = df.merge(enr_df, on="time", how="left", suffixes=("", "_enriched"))
 except Exception as e:
-    st.warning(f"Enriched join failed (using local hi_pHi/lo_pLo instead): {e}")
+    st.warning(f"Could not join es_30m_enriched; falling back to local calculations: {e}")
+
+# =========================
+# Ensure session-level fields exist (prefer enriched, fallback to local)
+# =========================
+
+# cum_vol
+if "cum_vol" not in df.columns or df["cum_vol"].isna().all():
+    df["cum_vol"] = df.groupby("trade_day")["Volume"].cumsum()
+
+# session_high / session_low
+if "session_high" not in df.columns or df["session_high"].isna().all():
+    df["session_high"] = df.groupby("trade_day")["high"].cummax()
+if "session_low" not in df.columns or df["session_low"].isna().all():
+    df["session_low"]  = df.groupby("trade_day")["low"].cummin()
+
+# hi_op / op_lo
+if "hi_op" not in df.columns or df["hi_op"].isna().all():
+    df["hi_op"]  = df["high"] - df["open"]
+if "op_lo" not in df.columns or df["op_lo"].isna().all():
+    df["op_lo"]  = df["open"] - df["low"]
+
+# pHi / pLo – prefer enriched, fallback to prior-day extrema
+if ("pHi" not in df.columns) or df["pHi"].isna().all() or \
+   ("pLo" not in df.columns) or df["pLo"].isna().all():
+    daily_hi_lo = (
+        df.groupby("trade_day")
+          .agg(day_high=("high","max"), day_low=("low","min"))
+          .sort_index()
+          .reset_index()
+    )
+    daily_hi_lo["pHi_fallback"] = daily_hi_lo["day_high"].shift(1)
+    daily_hi_lo["pLo_fallback"] = daily_hi_lo["day_low"].shift(1)
+    df = df.merge(
+        daily_hi_lo[["trade_day","pHi_fallback","pLo_fallback"]],
+        on="trade_day",
+        how="left"
+    )
+    if "pHi" not in df.columns:
+        df["pHi"] = df["pHi_fallback"]
+    else:
+        df["pHi"] = df["pHi"].where(df["pHi"].notna(), df["pHi_fallback"])
+    if "pLo" not in df.columns:
+        df["pLo"] = df["pLo_fallback"]
+    else:
+        df["pLo"] = df["pLo"].where(df["pLo"].notna(), df["pLo_fallback"])
+    df = df.drop(columns=[c for c in ["pHi_fallback","pLo_fallback"] if c in df.columns])
+
+# hi_pHi / lo_pLo from enriched hi_phi / lo_plo where available; fallback to computed deltas
+if "hi_phi" in df.columns and df["hi_phi"].notna().any():
+    if "hi_pHi" not in df.columns:
+        df["hi_pHi"] = df["hi_phi"]
+    else:
+        df["hi_pHi"] = df["hi_pHi"].where(df["hi_pHi"].notna(), df["hi_phi"])
+else:
+    if "hi_pHi" not in df.columns:
+        df["hi_pHi"] = df["high"] - df["pHi"]
+    else:
+        mask = df["hi_pHi"].isna()
+        df.loc[mask, "hi_pHi"] = df.loc[mask, "high"] - df.loc[mask, "pHi"]
+
+if "lo_plo" in df.columns and df["lo_plo"].notna().any():
+    if "lo_pLo" not in df.columns:
+        df["lo_pLo"] = df["lo_plo"]
+    else:
+        df["lo_pLo"] = df["lo_pLo"].where(df["lo_pLo"].notna(), df["lo_plo"])
+else:
+    if "lo_pLo" not in df.columns:
+        df["lo_pLo"] = df["low"] - df["pLo"]
+    else:
+        mask = df["lo_pLo"].isna()
+        df.loc[mask, "lo_pLo"] = df.loc[mask, "low"] - df.loc[mask, "pLo"]
 
 # Helper: trailing mean (shifted to avoid look-ahead)
 def trailing_mean(s: pd.Series, n: int) -> pd.Series:
@@ -222,7 +282,7 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
         day_close=("close","last"),
     )
 
-    # Highs/Lows/Volume + bar count
+    # Highs/Lows/Volume
     hilo = scope.groupby("trade_day").agg(
         day_high=("high","max"),
         day_low=("low","min"),
@@ -245,7 +305,6 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
         cum_vol_at_cutoff=("cum_vol","last"),
     )
 
-    # Compose
     out = (
         first_last.join(hilo)
                   .join(bars)
@@ -325,18 +384,31 @@ hdr = f"{symbol} — {'As-of ' + asof_time.strftime('%H:%M ET') if asof_time els
 st.subheader(hdr)
 
 k1, k2, k3, k4 = st.columns(4)
-k1.metric(f"Range vs {trailing_window}d",
-          f"{row.get('day_range', np.nan):.2f}" if pd.notna(row.get('day_range')) else "—",
-          None if pd.isna(row.get('day_range_pct_vs_tw')) else f"{row['day_range_pct_vs_tw']*100:+.1f}%")
-k2.metric(f"Cum Vol vs {trailing_window}d",
-          f"{row.get('cum_vol_at_cutoff', np.nan):,.0f}" if pd.notna(row.get('cum_vol_at_cutoff')) else "—",
-          None)
-k3.metric("Session High (cutoff)",
-          f"{row.get('session_high_at_cutoff', np.nan):.2f}" if pd.notna(row.get('session_high_at_cutoff')) else "—")
-k4.metric("Session Low (cutoff)",
-          f"{row.get('session_low_at_cutoff',  np.nan):.2f}" if pd.notna(row.get('session_low_at_cutoff'))  else "—")
+k1.metric(
+    f"Range vs {trailing_window}d",
+    f"{row.get('day_range', np.nan):.2f}" if pd.notna(row.get('day_range')) else "—",
+    None if pd.isna(row.get('day_range_pct_vs_tw')) else f"{row['day_range_pct_vs_tw']*100:+.1f}%"
+)
+k2.metric(
+    f"Cum Vol vs {trailing_window}d",
+    f"{row.get('cum_vol_at_cutoff', np.nan):,.0f}" if pd.notna(row.get('cum_vol_at_cutoff')) else "—",
+    None  # you can add % vs trailing later if you want
+)
+k3.metric(
+    "Session High (cutoff)",
+    f"{row.get('session_high_at_cutoff', np.nan):.2f}" if pd.notna(row.get('session_high_at_cutoff')) else "—"
+)
+k4.metric(
+    "Session Low (cutoff)",
+    f"{row.get('session_low_at_cutoff',  np.nan):.2f}" if pd.notna(row.get('session_low_at_cutoff'))  else "—"
+)
 
-st.caption("Session metrics reset at 18:00 ET. Cumulative volume and session high/low are computed from 18:00 ET forward, using all available bars (backfilled if needed). Trailing averages exclude the current day.")
+st.caption(
+    "Session metrics come from **es_30m_enriched** and reset at 18:00 ET. "
+    "Cumulative volume and session high/low are taken at the last bar in the current filter "
+    "(full-day = last bar of the session; as-of snapshot = last bar before the cutoff). "
+    "Trailing averages exclude the current day."
+)
 
 # =========================
 # Table (last N trade days)
@@ -395,7 +467,8 @@ for name in tbl.columns:
         fmt[name] = "{:,.2f}"
 
 def color_pos_neg(val):
-    if pd.isna(val): return ""
+    if pd.isna(val): 
+        return ""
     try:
         v = float(val)
     except Exception:
@@ -403,8 +476,11 @@ def color_pos_neg(val):
     return f"color: {'#16a34a' if v>0 else ('#dc2626' if v<0 else '#111827')};"
 
 vs_cols = [c for c in tbl.columns if "vs" in c and "% pMid Hit" not in c]
-styled = tbl.style.format(fmt).applymap(color_pos_neg, subset=vs_cols).set_properties(
-    subset=["Trade Date"], **{"font-weight":"600"}
+styled = (
+    tbl.style
+       .format(fmt)
+       .applymap(color_pos_neg, subset=vs_cols)
+       .set_properties(subset=["Trade Date"], **{"font-weight":"600"})
 )
 st.dataframe(styled, use_container_width=True)
 
@@ -413,5 +489,5 @@ with st.expander("Data health (debug)"):
         "latest_bar_time_et": str(latest_bar_time),
         "expected_latest_trade_day": str(latest_trade_day_expected),
         "kept_trade_days_desc": [str(d) for d in recent_trade_days_desc.tolist()],
-        "rows_total": int(len(df)),
+        "rows_total_after_filters": int(len(df)),
     })
