@@ -40,7 +40,7 @@ if mode == "As-of time snapshot":
 # =========================
 # Fetch (newest-first) + choose last N trade days like main App
 # =========================
-TABLE = "es_30m"  # adjust if needed
+TABLE = "es_30m"  # base price table
 
 rows_per_day_guess = 48  # 30m bars
 rows_to_load = int(max(2000, trade_days_to_keep * rows_per_day_guess * 1.5))
@@ -183,6 +183,30 @@ daily_hi_lo["pLo"] = daily_hi_lo["day_low"].shift(1)
 df = df.merge(daily_hi_lo[["trade_day","pHi","pLo"]], on="trade_day", how="left")
 df["hi_pHi"] = df["high"] - df["pHi"]
 df["lo_pLo"] = df["low"]  - df["pLo"]
+
+# ✅ NEW: pull hi_phi / lo_plo from es_30m_enriched and override hi_pHi / lo_pLo
+try:
+    min_time = df["time"].min()
+    max_time = df["time"].max()
+    if pd.notna(min_time) and pd.notna(max_time):
+        enr_resp = (
+            sb.table("es_30m_enriched")
+              .select("time,hi_phi,lo_plo")
+              .gte("time", min_time.isoformat())
+              .lte("time", max_time.isoformat())
+              .execute()
+        )
+        enr_df = pd.DataFrame(enr_resp.data)
+        if not enr_df.empty:
+            enr_df["time"] = pd.to_datetime(enr_df["time"], utc=True, errors="coerce")
+            df = df.merge(enr_df, on="time", how="left")
+            # override with enriched values where present
+            if "hi_phi" in df.columns:
+                df["hi_pHi"] = df["hi_phi"]
+            if "lo_plo" in df.columns:
+                df["lo_pLo"] = df["lo_plo"]
+except Exception as e:
+    st.warning(f"Enriched join failed (using local hi_pHi/lo_pLo instead): {e}")
 
 # Helper: trailing mean (shifted to avoid look-ahead)
 def trailing_mean(s: pd.Series, n: int) -> pd.Series:
