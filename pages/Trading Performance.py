@@ -8,6 +8,7 @@ from datetime import timedelta
 import pandas as pd
 import streamlit as st
 from supabase import create_client
+import altair as alt  # NEW: for charts
 
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
@@ -387,9 +388,55 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
         })
     return pd.DataFrame(out)
 
+# ===== Helper: classify session for a timestamp =====
+def _classify_session(ts):
+    """
+    Session based on entry_ts_est (EST):
+      - Overnight: 18:00–03:59
+      - Premarket: 04:00–09:29
+      - RTH IB:   09:30–10:29
+      - Morning:  10:30–11:59
+      - Lunch:    12:00–13:29
+      - Afternoon:13:30–16:59
+    """
+    if pd.isna(ts):
+        return "Unknown"
+    t = ts.time()
+    h, m = t.hour, t.minute
+
+    # Overnight 18:00–23:59 or 00:00–03:59
+    if h >= 18 or h <= 3:
+        return "Overnight (18:00–03:59)"
+
+    # Premarket 04:00–09:29
+    if (4 <= h <= 8) or (h == 9 and m <= 29):
+        return "Premarket (04:00–09:29)"
+
+    # RTH IB 09:30–10:29
+    if (h == 9 and m >= 30) or (h == 10 and m <= 29):
+        return "RTH IB (09:30–10:29)"
+
+    # RTH Morning 10:30–11:59
+    if (h == 10 and m >= 30) or (h == 11):
+        return "RTH Morning (10:30–11:59)"
+
+    # Lunch 12:00–13:29
+    if h == 12 or (h == 13 and m <= 29):
+        return "Lunch (12:00–13:29)"
+
+    # Afternoon 13:30–16:59
+    if (h == 13 and m >= 30) or (14 <= h <= 16):
+        return "Afternoon (13:30–16:59)"
+
+    return "Other"
+
 # ---------- UI ----------
 st.title("Trading Performance (EST)")
-tab_upload, tab_trades, tab_groups, tab_guards = st.tabs(["Upload", "Trades", "Groups", "Guardrails"])
+
+# NEW: Added Stats tab in between Trades and Groups
+tab_upload, tab_trades, tab_stats, tab_groups, tab_guards = st.tabs(
+    ["Upload", "Trades", "Stats", "Groups", "Guardrails"]
+)
 
 # Session state
 if "just_imported" not in st.session_state:
@@ -497,7 +544,6 @@ with tab_trades:
             suffixes=("", "_old"),
         )
 
-
         # Persist inline edits (r_multiple / review_status)
         diff_cols = ["r_multiple", "review_status"]
         to_update = []
@@ -575,6 +621,119 @@ with tab_trades:
             st.cache_data.clear()
             st.session_state.last_imported_external_ids = []
             st.rerun()
+
+# ==== NEW: STATS TAB ====
+with tab_stats:
+    st.subheader("Performance Statistics")
+
+    df_stats = _load_trades()
+    if df_stats.empty:
+        st.info("No trades yet.")
+    else:
+        # Ensure numeric PnL
+        df_stats["pnl_net"] = pd.to_numeric(df_stats["pnl_net"], errors="coerce").fillna(0.0)
+
+        # Overall stats
+        wins_mask = df_stats["pnl_net"] > 0
+        losses_mask = df_stats["pnl_net"] < 0
+        n_wins = wins_mask.sum()
+        n_losses = losses_mask.sum()
+        n_trades = len(df_stats)
+
+        win_rate = (n_wins / (n_wins + n_losses)) if (n_wins + n_losses) > 0 else 0.0
+        avg_win = df_stats.loc[wins_mask, "pnl_net"].mean() if n_wins > 0 else 0.0
+        avg_loss = df_stats.loc[losses_mask, "pnl_net"].mean() if n_losses > 0 else 0.0
+        total_pnl = df_stats["pnl_net"].sum()
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Win rate", f"{win_rate:.1%}")
+        c2.metric("Avg Win", f"{avg_win:,.2f}")
+        c3.metric("Avg Loss", f"{avg_loss:,.2f}")
+        c4.metric("Total PnL", f"{total_pnl:,.2f}")
+
+        # Equity curve
+        st.markdown("### Equity Curve (Cumulative PnL)")
+        eq = df_stats.sort_values("entry_ts_est").copy()
+        eq["cum_pnl"] = eq["pnl_net"].cumsum()
+        eq_chart = alt.Chart(eq).mark_line().encode(
+            x=alt.X("entry_ts_est:T", title="Entry time (EST)"),
+            y=alt.Y("cum_pnl:Q", title="Cumulative PnL"),
+            tooltip=["entry_ts_est:T", "cum_pnl:Q"]
+        ).properties(height=250, use_container_width=True)
+        st.altair_chart(eq_chart, use_container_width=True)
+
+        # Daily "calendar" summary
+        st.markdown("### Daily PnL / Trades / Win Rate")
+
+        df_stats["trade_date"] = df_stats["entry_ts_est"].dt.date
+        daily = df_stats.groupby("trade_date").agg(
+            pnl_day=("pnl_net", "sum"),
+            n_trades=("pnl_net", "size"),
+            wins=("pnl_net", lambda s: (s > 0).sum()),
+            losses=("pnl_net", lambda s: (s < 0).sum())
+        ).reset_index()
+
+        # win rate per day
+        daily["win_rate"] = daily.apply(
+            lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
+            axis=1
+        )
+        daily["trade_date"] = pd.to_datetime(daily["trade_date"])
+
+        # Heatmap-style calendar (month x day) colored by PnL
+        cal_chart = alt.Chart(daily).mark_rect().encode(
+            x=alt.X("date(trade_date):O", title="Day of month"),
+            y=alt.Y("month(trade_date):O", title="Month"),
+            color=alt.Color("pnl_day:Q", title="PnL", scale=alt.Scale(scheme="redyellowgreen")),
+            tooltip=[
+                alt.Tooltip("trade_date:T", title="Date"),
+                alt.Tooltip("pnl_day:Q", title="PnL", format=",.2f"),
+                alt.Tooltip("n_trades:Q", title="# Trades"),
+                alt.Tooltip("win_rate:Q", title="Win rate", format=".1%")
+            ]
+        ).properties(height=250)
+        st.altair_chart(cal_chart, use_container_width=True)
+
+        # Also show daily table with useful columns
+        st.dataframe(
+            daily[["trade_date", "pnl_day", "n_trades", "win_rate"]]
+            .sort_values("trade_date", ascending=False)
+            .rename(columns={
+                "trade_date": "Date",
+                "pnl_day": "PnL",
+                "n_trades": "# Trades",
+                "win_rate": "Win rate"
+            }),
+            use_container_width=True
+        )
+
+        # Session stats table
+        st.markdown("### Session Performance")
+
+        df_stats["session"] = df_stats["entry_ts_est"].apply(_classify_session)
+
+        session_stats = df_stats.groupby("session").agg(
+            n_trades=("pnl_net", "size"),
+            wins=("pnl_net", lambda s: (s > 0).sum()),
+            losses=("pnl_net", lambda s: (s < 0).sum()),
+            pnl=("pnl_net", "sum")
+        ).reset_index()
+
+        session_stats["win_rate"] = session_stats.apply(
+            lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
+            axis=1
+        )
+
+        session_stats_display = session_stats[["session", "n_trades", "win_rate", "pnl"]].rename(
+            columns={
+                "session": "Session",
+                "n_trades": "# Trades",
+                "win_rate": "Win rate",
+                "pnl": "PnL"
+            }
+        ).sort_values("Session")
+
+        st.dataframe(session_stats_display, use_container_width=True)
 
 # ---- Groups (collapsed + details, with hashtag filter) ----
 with tab_groups:
@@ -671,6 +830,7 @@ with tab_guards:
         st.info("No trades yet.")
     else:
         df = df.sort_values("entry_ts_est")
+        df["pnl_net"] = pd.to_numeric(df["pnl_net"], errors="coerce").fillna(0.0)
         st.metric("Win rate", f"{(df['pnl_net'] > 0).mean():.0%}")
         st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(days=7))).sum()))
         st.metric("Net PnL (sum)", f"{df['pnl_net'].sum():,.2f}")
