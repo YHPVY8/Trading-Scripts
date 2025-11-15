@@ -1,3 +1,4 @@
+# pages/Trading Performance.py
 #!/usr/bin/env python3
 import io
 import re
@@ -17,6 +18,10 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
+
+# === Calendar size control ===
+CAL_MAX_WIDTH = 360  # <-- TWEAK THIS NUMBER to shrink/grow the entire calendar (px)
+
 
 # ---------- Utilities ----------
 def _clean_header(name: str) -> str:
@@ -556,7 +561,7 @@ def _classify_session(ts):
     return "Other"
 
 
-# ===== Calendar renderer (medium balanced size) =====
+# ===== Calendar renderer (version B with CAL_MAX_WIDTH) =====
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
     Render a month calendar with:
@@ -590,51 +595,52 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     weekday_mon0 = first_day.weekday()  # Mon=0..Sun=6
     start_date = first_day - timedelta(days=weekday_mon0)
 
-    # Calendar CSS (square tiles, medium size, black font)
+    # ===== CSS: wrapper + tiles =====
     st.markdown(
-        """
+        f"""
         <style>
-        .cal-wrapper {
-            max-width: 240px;   /* medium balanced width: tweak this number */
+        .cal-wrapper {{
+            max-width: {CAL_MAX_WIDTH}px;   /* <<< THIS CONTROLS OVERALL CALENDAR WIDTH */
             margin: 0 auto;
-        }
-        .cal-cell {
+        }}
+        .cal-cell {{
             border: 1px solid #b0b0b0;
             border-radius: 4px;
-            padding: 2px 2px;
-            aspect-ratio: 1 / 1;
+            padding: 2px 2px;              /* inner spacing inside each square */
+            aspect-ratio: 1 / 1;           /* keep squares */
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-        }
-        .cal-day-label {
-            font-size: 0.85rem;
-            color: #000000;
-            opacity: 0.8;
-        }
-        .cal-pnl {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: #000000;
-        }
-        .cal-trades {
+        }}
+        .cal-day-label {{
             font-size: 0.75rem;
             color: #000000;
-            opacity: 0.85;
-        }
-        .cal-week-summary {
+            opacity: 0.8;
+        }}
+        .cal-pnl {{
             font-size: 0.8rem;
+            font-weight: 700;
+            color: #000000;
+        }}
+        .cal-trades {{
+            font-size: 0.7rem;
+            color: #000000;
+            opacity: 0.85;
+        }}
+        .cal-week-summary {{
+            font-size: 0.75rem;
             color: #000000;
             text-align: center;
-        }
+        }}
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    # Wrap calendar in width-limited div
+    # Wrap everything in a fixed-width container
     st.markdown("<div class='cal-wrapper'>", unsafe_allow_html=True)
 
+    # Header row
     header_cols = st.columns(6)
     for col, name in zip(header_cols, ["Mo", "Tu", "We", "Th", "Fr", "Week"]):
         col.markdown(
@@ -895,7 +901,6 @@ with tab_trades:
                 old = r.get(f"{c}_old")
                 if pd.isna(new) and pd.isna(old):
                     continue
-            # noqa: E501
                 if (pd.isna(new) and not pd.isna(old)) or (
                     not pd.isna(new) and pd.isna(old)
                 ) or (new != old):
@@ -1074,7 +1079,7 @@ with tab_stats:
 
         _render_pnl_calendar(month_daily, selected_period)
 
-        # Daily table: # Trades, PnL, Avg Win, Avg Loss, Win rate (%)
+        # Daily table: # Trades, PnL, Avg Win, Avg Loss, Win rate (%), Date mm/dd/yy
         daily_display = month_daily.copy()
         daily_display["Win rate (%)"] = (daily_display["win_rate"] * 100).round(1)
         daily_display["Date"] = daily_display["trade_date"].dt.strftime("%m/%d/%y")
