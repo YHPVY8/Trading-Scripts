@@ -172,7 +172,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         opacity: 0.85;
     }
     .cal-week-summary {
-        font-size: 0.95rem;
+        font-size: 1.15rem;
         text-align: center;
         color: #000;
     }
