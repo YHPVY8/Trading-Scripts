@@ -601,7 +601,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             justify-content: space-between;
         }
         .cal-day-label {
-            font-size: 0.65rem;
+            font-size: 0.95rem;
             color: #000000;
             opacity: 0.8;
         }
@@ -616,7 +616,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             opacity: 0.85;
         }
         .cal-week-summary {
-            font-size: 0.75rem;
+            font-size: 0.95rem;
             color: #000000;
             text-align: center;
         }
