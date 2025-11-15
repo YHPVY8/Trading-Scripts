@@ -272,7 +272,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     )
 
     # 🔥 Use components.html so HTML is never escaped
-    components.html(css + full_html, height=420, scrolling=False)
+    components.html(css + full_html, height=620, scrolling=False)
 
 
 # ========== MAIN UI ==========
