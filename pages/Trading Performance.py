@@ -3,12 +3,12 @@
 import io
 import re
 import hashlib
-from datetime import timedelta
+from datetime import timedelta, date
 
 import pandas as pd
 import streamlit as st
 from supabase import create_client
-import altair as alt  # NEW: for charts
+import altair as alt  # for charts
 
 st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
 
@@ -392,486 +392,174 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
 def _classify_session(ts):
     """
     Session based on entry_ts_est (EST):
-      - Overnight: 18:00–03:59
-      - Premarket: 04:00–09:29
-      - RTH IB:   09:30–10:29
-      - Morning:  10:30–11:59
-      - Lunch:    12:00–13:29
-      - Afternoon:13:30–16:59
+      - Overnight: 18:00:00–03:59:59
+      - Premarket: 04:00:00–09:29:59
+      - RTH IB:   09:30:00–10:29:59
+      - RTH Morning: 10:30:00–11:59:59
+      - Lunch:    12:00:00–13:29:59
+      - Afternoon:13:30:00–16:59:59
     """
     if pd.isna(ts):
         return "Unknown"
+
     t = ts.time()
-    h, m = t.hour, t.minute
+    h, m, s = t.hour, t.minute, t.second
+    seconds = h * 3600 + m * 60 + s
 
-    # Overnight 18:00–23:59 or 00:00–03:59
-    if h >= 18 or h <= 3:
-        return "Overnight (18:00–03:59)"
+    # Overnight 18:00:00–23:59:59 or 00:00:00–03:59:59
+    if seconds >= 18 * 3600 or seconds <= 3 * 3600 + 59 * 60 + 59:
+        return "Overnight (18:00–03:59:59)"
 
-    # Premarket 04:00–09:29
-    if (4 <= h <= 8) or (h == 9 and m <= 29):
-        return "Premarket (04:00–09:29)"
+    # Premarket 04:00:00–09:29:59
+    if 4 * 3600 <= seconds <= 9 * 3600 + 29 * 60 + 59:
+        return "Premarket (04:00–09:29:59)"
 
-    # RTH IB 09:30–10:29
-    if (h == 9 and m >= 30) or (h == 10 and m <= 29):
-        return "RTH IB (09:30–10:29)"
+    # RTH IB 09:30:00–10:29:59
+    if 9 * 3600 + 30 * 60 <= seconds <= 10 * 3600 + 29 * 60 + 59:
+        return "RTH IB (09:30–10:29:59)"
 
-    # RTH Morning 10:30–11:59
-    if (h == 10 and m >= 30) or (h == 11):
-        return "RTH Morning (10:30–11:59)"
+    # RTH Morning 10:30:00–11:59:59
+    if 10 * 3600 + 30 * 60 <= seconds <= 11 * 3600 + 59 * 60 + 59:
+        return "RTH Morning (10:30–11:59:59)"
 
-    # Lunch 12:00–13:29
-    if h == 12 or (h == 13 and m <= 29):
-        return "Lunch (12:00–13:29)"
+    # Lunch 12:00:00–13:29:59
+    if 12 * 3600 <= seconds <= 13 * 3600 + 29 * 60 + 59:
+        return "Lunch (12:00–13:29:59)"
 
-    # Afternoon 13:30–16:59
-    if (h == 13 and m >= 30) or (14 <= h <= 16):
-        return "Afternoon (13:30–16:59)"
+    # Afternoon 13:30:00–16:59:59
+    if 13 * 3600 + 30 * 60 <= seconds <= 16 * 3600 + 59 * 60 + 59:
+        return "Afternoon (13:30–16:59:59)"
 
     return "Other"
 
-# ---------- UI ----------
-st.title("Trading Performance (EST)")
+# ===== Helper: PnL calendar renderer =====
+def _render_pnl_calendar(month_daily: pd.DataFrame, period):
+    """
+    Render a month calendar with one tile per day:
+      - Big PnL number (green/red)
+      - # trades
+      - On Saturdays: weekly PnL + # trades (Week 1, Week 2, ...)
+    `month_daily` must have columns: trade_date (datetime), pnl_day, n_trades.
+    `period` is a pandas Period('YYYY-MM').
+    """
+    if month_daily.empty:
+        st.info("No trades for this month.")
+        return
 
-# NEW: Added Stats tab in between Trades and Groups
-tab_upload, tab_trades, tab_stats, tab_groups, tab_guards = st.tabs(
-    ["Upload", "Trades", "Stats", "Groups", "Guardrails"]
-)
+    month_daily = month_daily.copy()
+    month_daily["date_only"] = month_daily["trade_date"].dt.date
+    by_date = month_daily.set_index("date_only")[["pnl_day", "n_trades"]].to_dict("index")
 
-# Session state
-if "just_imported" not in st.session_state:
-    st.session_state.just_imported = False
-if "last_imported_external_ids" not in st.session_state:
-    st.session_state.last_imported_external_ids = []
-if "auto_select_after_upload" not in st.session_state:
-    st.session_state.auto_select_after_upload = False  # default OFF
+    # Calendar bounds
+    first_ts = period.to_timestamp()
+    year, month = first_ts.year, first_ts.month
+    first_day = date(year, month, 1)
+    # last_day is last day of that month
+    last_day = (first_ts + first_ts.freq - pd.Timedelta(days=1)).date()
 
-# ---- Upload ----
-with tab_upload:
-    st.subheader("Upload CSV")
-    up = st.file_uploader("Drop your trade export", type=["csv"])
-    if up and not st.session_state.just_imported:
-        rows, dbg = _read_csv_to_rows(up.read())
-        st.caption("Original headers: " + ", ".join(dbg["original_headers"]))
-        st.caption("Normalized headers: " + ", ".join(dbg["normalized_headers"]))
-        st.caption("Canonical mapped pairs: " + ", ".join([f"{pair[1]} -> {pair[0]}" for pair in dbg["canonical_mapped_pairs"]]))
-        st.caption(f"Row count detected: {dbg['row_count']}")
-        if rows:
-            ins, skip, errs, samples, new_ext_ids, new_trade_ids = _upsert_trades_from_rows(rows)
-            if ins > 0:
-                st.success(f"Imported/updated {ins} trades (skipped {skip}).")
-            else:
-                st.error(f"Imported/updated {ins} trades (skipped {skip}).")
-            if samples:
-                with st.expander("Sample payloads attempted (first 5)"):
-                    st.json(samples)
-            if errs:
-                with st.expander("Errors (first 25)"):
-                    st.json(errs)
-            st.cache_data.clear()
-            st.session_state.last_imported_external_ids = new_ext_ids
-            st.session_state.just_imported = True
-            st.info("Switch to the Trades tab to tag/group the new trades.")
-        else:
-            st.error("No rows found.")
-    elif st.session_state.just_imported:
-        st.info("Upload complete. Switch to the Trades tab to tag/group the new trades.")
-        if up is None:
-            st.session_state.just_imported = False
+    # Start on Sunday before or equal to first_day
+    weekday_mon0 = first_day.weekday()          # Mon=0..Sun=6
+    sunday_offset = (weekday_mon0 + 1) % 7      # days back to Sunday
+    start_date = first_day - timedelta(days=sunday_offset)
 
-# ---- Trades ----
-with tab_trades:
-    st.subheader("Trades (legs)")
-    df = _load_trades()
-    if df.empty:
-        st.info("No trades yet.")
-    else:
-        # Toggle whether to auto-select newly uploaded rows
-        st.checkbox("Auto-select newly imported trades", key="auto_select_after_upload")
-
-        # Attach tags
-        tagmap = _fetch_tags_for(df["id"].tolist())
-        df["tags"] = df["id"].map(lambda i: ", ".join(sorted(tagmap.get(i, []))))
-
-        # Display-friendly names
-        rename_map = {
-            "external_trade_id": "Trade ID",
-            "entry_ts_est": "Entry (EST)",
-            "exit_ts_est": "Exit (EST)",
-            "pnl_net": "PnL (Net)",
+    # Styles
+    st.markdown(
+        """
+        <style>
+        .cal-cell {
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 4px 6px;
+            min-height: 90px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            background-color: #141414;
         }
+        .cal-day-label {
+            font-size: 0.7rem;
+            opacity: 0.7;
+        }
+        .cal-pnl {
+            font-size: 0.9rem;
+            font-weight: 700;
+        }
+        .cal-trades {
+            font-size: 0.7rem;
+            opacity: 0.8;
+        }
+        .cal-week-summary {
+            margin-top: 4px;
+            font-size: 0.7rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        # Insert selection column
-        if "selected" not in df.columns:
-            df.insert(0, "selected", False)
+    # Header row Su..Sa
+    header_cols = st.columns(7)
+    for col, name in zip(header_cols, ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]):
+        col.markdown(f"<div style='text-align:center; font-weight:600;'>{name}</div>", unsafe_allow_html=True)
 
-        # Only preselect after upload if toggle is ON
-        if st.session_state.auto_select_after_upload and st.session_state.last_imported_external_ids:
-            df.loc[df["external_trade_id"].isin(st.session_state.last_imported_external_ids), "selected"] = True
+    week_counter = 0
+    # Up to 6 calendar weeks
+    for week_idx in range(6):
+        row_start = start_date + timedelta(days=7 * week_idx)
+        row_end = row_start + timedelta(days=6)
+        week_dates = [row_start + timedelta(days=d) for d in range(7)]
 
-        df_display = df.rename(columns=rename_map)
+        # Does this week touch the selected month?
+        has_month_day = any((d.month == month and d.year == year) for d in week_dates)
+        if not has_month_day and row_start > last_day:
+            break
+        if has_month_day:
+            week_counter += 1
 
-        view_cols = [
-            "selected", "Trade ID", "symbol", "side",
-            "Entry (EST)", "Exit (EST)", "qty", "pnl_gross", "fees", "PnL (Net)",
-            "r_multiple", "review_status", "tags"
+        in_week = month_daily[
+            (month_daily["trade_date"].dt.date >= row_start)
+            & (month_daily["trade_date"].dt.date <= row_end)
         ]
-        view_cols = [c for c in view_cols if c in df_display.columns]
+        week_pnl = float(in_week["pnl_day"].sum()) if not in_week.empty else 0.0
+        week_trades = int(in_week["n_trades"].sum()) if not in_week.empty else 0
 
-        edited = st.data_editor(
-            df_display[view_cols],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "selected": st.column_config.CheckboxColumn("✓"),
-                "pnl_gross": st.column_config.NumberColumn("PnL (Gross)", step=0.01, format="%.2f"),
-                "fees": st.column_config.NumberColumn("Fees", step=0.01, format="%.2f"),
-                "PnL (Net)": st.column_config.NumberColumn("PnL (Net)", step=0.01, format="%.2f"),
-                "r_multiple": st.column_config.NumberColumn("R Multiple", step=0.01),
-                "review_status": st.column_config.SelectboxColumn("Review Status", options=["unreviewed", "flagged", "reviewed"]),
-                "tags": st.column_config.TextColumn("Tags (read-only)"),
-            },
-            disabled=[c for c in view_cols if c not in ("selected", "r_multiple", "review_status")],
-            num_rows="fixed",
-        )
+        cols = st.columns(7)
+        for i, (col, d) in enumerate(zip(cols, week_dates)):
+            if d.month != month or d.year != year:
+                col.markdown("<div class='cal-cell'></div>", unsafe_allow_html=True)
+                continue
 
-        # Map back to original names and bring internal id for persistence
-        edited_back = edited.rename(columns={v: k for k, v in rename_map.items()})
-        edited_back = edited_back.merge(
-            df[["external_trade_id", "id", "r_multiple", "review_status"]],
-            on="external_trade_id",
-            how="left",
-            suffixes=("", "_old"),
-        )
+            stats = by_date.get(d)
+            pnl = stats["pnl_day"] if stats else 0.0
+            n_trades = stats["n_trades"] if stats else 0
 
-        # Persist inline edits (r_multiple / review_status)
-        diff_cols = ["r_multiple", "review_status"]
-        to_update = []
-        for _, r in edited_back.iterrows():
-            rec = {}
-            changed = False
-            for c in diff_cols:
-                new = r.get(c)
-                old = r.get(f"{c}_old")
-                if pd.isna(new) and pd.isna(old):
-                    continue
-                if (pd.isna(new) and not pd.isna(old)) or (not pd.isna(new) and pd.isna(old)) or (new != old):
-                    rec[c] = new
-                    changed = True
-            if changed and r.get("id"):
-                rec["id"] = r["id"]
-                to_update.append(rec)
-
-        if to_update:
-            sb.table("tj_trades").upsert(to_update, on_conflict="id").execute()
-            st.toast(f"Saved {len(to_update)} edits")
-            st.cache_data.clear()
-
-        st.markdown("---")
-        # Bulk actions: comments, tags, grouping, ungroup
-        selected_ids = edited_back.loc[edited_back.get("selected", False) == True, "id"].tolist()
-        st.write(f"Selected: {len(selected_ids)}")
-
-        with st.form("bulk_actions", clear_on_submit=True):
-            comment = st.text_area("Add comment (markdown)")
-            tag_str = st.text_input("Add tags (comma-separated)")
-
-            st.markdown("**Grouping**")
-            gmode = st.radio("Action", ["None", "Add to existing", "Create new (auto-name)", "Remove from group(s)"], horizontal=False)
-
-            existing = None
-            new_group_name = None
-            notes = st.text_input("Group notes (optional)")
-
-            if gmode == "Add to existing":
-                groups = _get_groups()
-                if groups:
-                    labels = [f"{g['name']} ({g['id'][:6]})" for g in groups]
-                    idx = st.selectbox(
-                        "Pick group",
-                        list(range(len(labels))) if labels else [],
-                        format_func=lambda i: labels[i] if labels else None
-                    )
-                    if groups and len(groups) > 0:
-                        existing = groups[idx]["id"]
-                else:
-                    st.info("No groups yet — choose 'Create new (auto-name)'.")
-            elif gmode == "Create new (auto-name)":
-                suggested = _next_group_name()
-                st.caption(f"Suggested name: **{suggested}**")
-                new_group_name = suggested  # use suggested automatically
-
-            do = st.form_submit_button("Apply")
-
-        if do and selected_ids:
-            if comment:
-                _save_comments(selected_ids, comment)
-            tags = [t.strip() for t in tag_str.split(",") if t.strip()]
-            if tags:
-                _save_tags(selected_ids, tags)
-
-            if gmode == "Add to existing" and existing:
-                _add_to_group(selected_ids, group_id=existing, notes=notes if notes else None)
-            elif gmode == "Create new (auto-name)":
-                _add_to_group(selected_ids, new_group_name=new_group_name, notes=notes if notes else None)
-            elif gmode == "Remove from group(s)":
-                _remove_from_groups(selected_ids)
-
-            st.success("Saved")
-            st.cache_data.clear()
-            st.session_state.last_imported_external_ids = []
-            st.rerun()
-
-# ==== NEW: STATS TAB ====
-with tab_stats:
-    st.subheader("Performance Statistics")
-
-    df_stats = _load_trades()
-    if df_stats.empty:
-        st.info("No trades yet.")
-    else:
-        # Ensure numeric PnL
-        df_stats["pnl_net"] = pd.to_numeric(df_stats["pnl_net"], errors="coerce").fillna(0.0)
-
-        # Overall stats
-        wins_mask = df_stats["pnl_net"] > 0
-        losses_mask = df_stats["pnl_net"] < 0
-        n_wins = wins_mask.sum()
-        n_losses = losses_mask.sum()
-        n_trades = len(df_stats)
-
-        win_rate = (n_wins / (n_wins + n_losses)) if (n_wins + n_losses) > 0 else 0.0
-        avg_win = df_stats.loc[wins_mask, "pnl_net"].mean() if n_wins > 0 else 0.0
-        avg_loss = df_stats.loc[losses_mask, "pnl_net"].mean() if n_losses > 0 else 0.0
-        total_pnl = df_stats["pnl_net"].sum()
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Win rate", f"{win_rate:.1%}")
-        c2.metric("Avg Win", f"{avg_win:,.2f}")
-        c3.metric("Avg Loss", f"{avg_loss:,.2f}")
-        c4.metric("Total PnL", f"{total_pnl:,.2f}")
-
-        # Equity curve
-        st.markdown("### Equity Curve (Cumulative PnL)")
-        eq = df_stats.sort_values("entry_ts_est").copy()
-        eq["cum_pnl"] = eq["pnl_net"].cumsum()
-        eq_chart = alt.Chart(eq).mark_line().encode(
-            x=alt.X("entry_ts_est:T", title="Entry time (EST)"),
-            y=alt.Y("cum_pnl:Q", title="Cumulative PnL"),
-            tooltip=["entry_ts_est:T", "cum_pnl:Q"]
-        ).properties(height=250)
-
-        st.altair_chart(eq_chart, use_container_width=True)
-
-
-        # Daily "calendar" summary
-        st.markdown("### Daily PnL / Trades / Win Rate")
-
-        df_stats["trade_date"] = df_stats["entry_ts_est"].dt.date
-        daily = df_stats.groupby("trade_date").agg(
-            pnl_day=("pnl_net", "sum"),
-            n_trades=("pnl_net", "size"),
-            wins=("pnl_net", lambda s: (s > 0).sum()),
-            losses=("pnl_net", lambda s: (s < 0).sum())
-        ).reset_index()
-
-        # win rate per day
-        daily["win_rate"] = daily.apply(
-            lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
-            axis=1
-        )
-        daily["trade_date"] = pd.to_datetime(daily["trade_date"])
-
-        # Heatmap-style calendar (month x day) colored by PnL
-        cal_chart = alt.Chart(daily).mark_rect().encode(
-            x=alt.X("date(trade_date):O", title="Day of month"),
-            y=alt.Y("month(trade_date):O", title="Month"),
-            color=alt.Color("pnl_day:Q", title="PnL", scale=alt.Scale(scheme="redyellowgreen")),
-            tooltip=[
-                alt.Tooltip("trade_date:T", title="Date"),
-                alt.Tooltip("pnl_day:Q", title="PnL", format=",.2f"),
-                alt.Tooltip("n_trades:Q", title="# Trades"),
-                alt.Tooltip("win_rate:Q", title="Win rate", format=".1%")
-            ]
-        ).properties(height=250)
-        st.altair_chart(cal_chart, use_container_width=True)
-
-        # Also show daily table with useful columns
-        st.dataframe(
-            daily[["trade_date", "pnl_day", "n_trades", "win_rate"]]
-            .sort_values("trade_date", ascending=False)
-            .rename(columns={
-                "trade_date": "Date",
-                "pnl_day": "PnL",
-                "n_trades": "# Trades",
-                "win_rate": "Win rate"
-            }),
-            use_container_width=True
-        )
-
-        # Session stats table
-        st.markdown("### Session Performance")
-
-        df_stats["session"] = df_stats["entry_ts_est"].apply(_classify_session)
-
-        session_stats = df_stats.groupby("session").agg(
-            n_trades=("pnl_net", "size"),
-            wins=("pnl_net", lambda s: (s > 0).sum()),
-            losses=("pnl_net", lambda s: (s < 0).sum()),
-            pnl=("pnl_net", "sum")
-        ).reset_index()
-
-        session_stats["win_rate"] = session_stats.apply(
-            lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
-            axis=1
-        )
-
-        session_stats_display = session_stats[["session", "n_trades", "win_rate", "pnl"]].rename(
-            columns={
-                "session": "Session",
-                "n_trades": "# Trades",
-                "win_rate": "Win rate",
-                "pnl": "PnL"
-            }
-        ).sort_values("Session")
-
-        st.dataframe(session_stats_display, use_container_width=True)
-
-# ---- Groups (collapsed + details, with hashtag filter) ----
-with tab_groups:
-    st.subheader("Groups (collapsed positions)")
-
-    groups, mem_df = _fetch_all_groups_with_members()
-    if not groups:
-        st.info("No groups yet. Create them from the Trades tab after importing.")
-    else:
-        # COLLAPSED TABLE (one line per group)
-        roll = _rollup_by_group(mem_df)
-
-        # join names/notes
-        name_map = {g["id"]: g["name"] for g in groups}
-        notes_map = {g["id"]: g.get("notes") for g in groups}
-        if not roll.empty:
-            roll["name"] = roll["group_id"].map(name_map)
-            roll["notes"] = roll["group_id"].map(notes_map)
-
-            # Filters
-            c1, c2, c3 = st.columns([1, 2, 3])
-            with c1:
-                day = st.date_input("Filter by day", value=None)
-            with c2:
-                hashtag_str = st.text_input("Filter by #hashtags in notes (comma-separated)", value="")
-            with c3:
-                sym = st.text_input("Symbol filter (optional)", value="").strip().upper()
-
-            rshow = roll.copy()
-            # day filter
-            if day is not None:
-                try:
-                    rshow = rshow[rshow["first_entry"].dt.date == day]
-                except Exception:
-                    pass
-            # hashtag filter (all hashtags must appear in notes)
-            if hashtag_str.strip():
-                tags = [t.strip().lstrip("#").lower() for t in hashtag_str.split(",") if t.strip()]
-                def _has_all_hashtags(txt):
-                    s = (txt or "").lower()
-                    return all(("#" + t) in s for t in tags)
-                rshow = rshow[rshow["notes"].apply(_has_all_hashtags)]
-            # symbol filter
-            if sym:
-                rshow = rshow[(rshow["symbol"].fillna("") == sym)]
-
-            show_cols = [
-                "name","symbol","side","first_entry","last_exit",
-                "legs","total_qty","vwap_entry","vwap_exit","pnl_net_sum","notes"
-            ]
-            show_cols = [c for c in show_cols if c in rshow.columns]
-            st.markdown("**Collapsed (1 row per group)**")
-            st.dataframe(
-                rshow[show_cols].sort_values(["first_entry"], ascending=[False]),
-                use_container_width=True
-            )
-
-            st.divider()
-
-            # DETAILS for a selected group
-            st.markdown("**Group details**")
-            label_to_id = {f"{name_map.get(g['id'],'(unnamed)')} ({g['id'][:6]})": g["id"] for g in groups}
-            choice = st.selectbox("Pick a group", list(label_to_id.keys()))
-            gid = label_to_id[choice]
-
-            gdf = mem_df[mem_df["group_id"] == gid].copy()
-            if gdf.empty:
-                st.info("No member trades in this group.")
+            if pnl > 0:
+                bg_color = "rgba(0, 128, 0, 0.35)"
+                pnl_color = "#7CFC00"
+            elif pnl < 0:
+                bg_color = "rgba(139, 0, 0, 0.45)"
+                pnl_color = "#FF6A6A"
             else:
-                # summary metrics for the chosen group
-                groll = _rollup_by_group(gdf.assign(group_id=gid))
-                if not groll.empty:
-                    row = groll.iloc[0]
-                    m1,m2,m3,m4 = st.columns(4)
-                    m1.metric("Legs", f"{int(row['legs'])}")
-                    m2.metric("Total Qty", f"{row['total_qty']:.0f}")
-                    m3.metric("VWAP Entry", "-" if row['vwap_entry'] is None else f"{row['vwap_entry']:.2f}")
-                    m4.metric("VWAP Exit", "-" if row['vwap_exit'] is None else f"{row['vwap_exit']:.2f}")
-                    st.metric("Net PnL (group)", f"{row['pnl_net_sum']:.2f}")
+                bg_color = "rgba(80, 80, 80, 0.45)"
+                pnl_color = "#CCCCCC"
 
-                trade_cols = ["external_trade_id","symbol","side",
-                              "entry_ts_est","exit_ts_est","qty","entry_px","exit_px",
-                              "pnl_net","r_multiple","review_status"]
-                trade_cols = [c for c in trade_cols if c in gdf.columns]
-                st.dataframe(gdf[trade_cols].sort_values("entry_ts_est"), use_container_width=True)
-        else:
-            st.info("You have groups, but no member trades yet.")
+            pnl_str = f"${pnl:,.2f}"
+            trades_str = f"{int(n_trades)} trades"
 
-# ---- Guardrails ----
-with tab_guards:
-    st.subheader("Guardrails (quick checks)")
-    df = _load_trades()
-    if df.empty:
-        st.info("No trades yet.")
-    else:
-        df = df.sort_values("entry_ts_est")
-        df["pnl_net"] = pd.to_numeric(df["pnl_net"], errors="coerce").fillna(0.0)
-        st.metric("Win rate", f"{(df['pnl_net'] > 0).mean():.0%}")
-        st.metric("Trades (7d)", str((df["entry_ts_est"] >= (pd.Timestamp.now() - pd.Timedelta(days=7))).sum()))
-        st.metric("Net PnL (sum)", f"{df['pnl_net'].sum():,.2f}")
+            week_summary_html = ""
+            if i == 6 and has_month_day:
+                week_pnl_str = f"${week_pnl:,.2f}"
+                week_pnl_color = "#7CFC00" if week_pnl > 0 else ("#FF6A6A" if week_pnl < 0 else "#CCCCCC")
+                week_summary_html = f"""
+                    <div class='cal-week-summary'>
+                        <div><b>Week {week_counter}</b></div>
+                        <div style="color:{week_pnl_color};">{week_pnl_str}</div>
+                        <div>{week_trades} trades</div>
+                    </div>
+                """
 
-        hits = []
-        ts = df["entry_ts_est"].tolist()
-        i = j = 0
-        while i < len(ts):
-            while j < len(ts) and (ts[j] - ts[i]) <= timedelta(minutes=60):
-                j += 1
-            if j - i > 6:
-                hits.append({"rule": "trades_per_60m_gt_6", "start": ts[i], "end": ts[j-1], "count": j - i})
-            i += 1
-
-        streak = 0
-        start = None
-        for _, r in df.iterrows():
-            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
-            if pnl < 0:
-                if streak == 0:
-                    start = r["entry_ts_est"]
-                streak += 1
-                if streak > 3:
-                    hits.append({"rule": "consecutive_losses_gt_3", "start": start, "end": r["exit_ts_est"], "count": streak})
-            else:
-                streak = 0
-                start = None
-
-        last_loss_exit = None
-        for _, r in df.sort_values("exit_ts_est").iterrows():
-            pnl = r["pnl_net"] if pd.notna(r["pnl_net"]) else 0
-            if pnl < 0:
-                last_loss_exit = r["exit_ts_est"]
-            else:
-                if last_loss_exit is not None and (r["entry_ts_est"] - last_loss_exit).total_seconds() <= 5 * 60:
-                    hits.append({"rule": "reentry_under_5m_after_loss", "loss_exit": last_loss_exit, "reentry": r["entry_ts_est"]})
-                last_loss_exit = None
-
-        if hits:
-            st.dataframe(pd.DataFrame(hits), use_container_width=True)
-        else:
-            st.success("No guardrail hits.")
+            html = f"""
+            <div class="cal-cell" style="background-color:{bg_color};">
+                <div class="cal-day-label">{d.day}</div>
+                <div style="text-align:center;">
+                    <div class="
