@@ -147,22 +147,22 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         vertical-align: top;
     }
     .cal-day-label {
-        font-size: 0.75rem;
+        font-size: 0.95rem;
         color: #000000;
         opacity: 0.8;
     }
     .cal-pnl {
-        font-size: 0.80rem;
+        font-size: 0.95rem;
         font-weight: 700;
         color: #000000;
     }
     .cal-trades {
-        font-size: 0.70rem;
+        font-size: 0.95rem;
         color: #000000;
         opacity: 0.85;
     }
     .cal-week-summary {
-        font-size: 0.75rem;
+        font-size: 0.95rem;
         color: #000000;
         text-align: center;
     }
