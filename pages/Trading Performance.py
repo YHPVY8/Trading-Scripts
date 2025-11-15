@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# pages/01_Trading_Performance.py
+# pages/01_Trades_Groups.py
 
 from datetime import timedelta
 import re
@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 from supabase import create_client
 
-st.set_page_config(page_title="Trading Performance (EST)", layout="wide")
+st.set_page_config(page_title="Trading & Groups (EST)", layout="wide")
 
 # ===== CONFIG =====
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
