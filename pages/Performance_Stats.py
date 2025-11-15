@@ -17,7 +17,7 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 # === Calendar size control (adjust this) ===
-CAL_MAX_WIDTH = 320  # px – make this 280 / 300 / 360 etc as you like
+CAL_MAX_WIDTH = 280  # px – make this 280 / 300 / 360 etc as you like
 
 
 # ---------- Load (simple view) ----------
