@@ -16,9 +16,6 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
-# === Calendar size control (adjust this) ===
-CAL_MAX_WIDTH = 280  # px – make this 280 / 300 / 360 etc as you like
-
 
 # ---------- Load (simple view) ----------
 @st.cache_data(ttl=60)
@@ -86,13 +83,14 @@ def _classify_session(ts):
     return "Other"
 
 
-# ===== Calendar renderer (HTML grid, fully size-controlled) =====
+# ===== Calendar renderer (HTML table – fixed medium size, centered) =====
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
     Render a month calendar with:
       - Columns: Mo, Tu, We, Th, Fr, Week
-      - One square tile per weekday in the month with PnL + # trades
-      - Week column is also a square tile with weekly PnL + # trades
+      - One square-ish tile per weekday in the month with PnL + # trades
+      - Week column is also a tile with weekly PnL + # trades
+    Uses a simple HTML table for predictable sizing & layout.
     """
     if month_daily.empty:
         st.info("No trades for this month.")
@@ -120,70 +118,70 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     weekday_mon0 = first_day.weekday()  # Mon=0..Sun=6
     start_date = first_day - timedelta(days=weekday_mon0)
 
-    # ===== CSS: wrapper + grid-based tiles =====
+    # CSS to keep cells compact & centered
     st.markdown(
-        f"""
+        """
         <style>
-        .cal-wrapper {{
-            width: {CAL_MAX_WIDTH}px;
-            max-width: {CAL_MAX_WIDTH}px;
-            margin: 0 auto;
-        }}
-        .cal-grid {{
-            display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            grid-auto-rows: 1fr;
-            gap: 4px;
-        }}
-        .cal-header {{
+        .cal-table-wrapper {
+            display: flex;
+            justify-content: center;
+            margin-top: 0.5rem;
+        }
+        .cal-table {
+            border-collapse: separate;
+            border-spacing: 4px;
+        }
+        .cal-header-cell {
             text-align: center;
             font-weight: 600;
             font-size: 0.80rem;
-        }}
-        .cal-cell {{
-            border: 1px solid #b0b0b0;
+        }
+        .cal-cell {
+            width: 70px;
+            height: 70px;
             border-radius: 4px;
-            padding: 2px 2px;
-            aspect-ratio: 1 / 1;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
+            border: 1px solid #b0b0b0;
+            padding: 2px;
             font-size: 0.70rem;
-        }}
-        .cal-day-label {{
+            vertical-align: top;
+        }
+        .cal-day-label {
             font-size: 0.75rem;
             color: #000000;
             opacity: 0.8;
-        }}
-        .cal-pnl {{
+        }
+        .cal-pnl {
             font-size: 0.80rem;
             font-weight: 700;
             color: #000000;
-        }}
-        .cal-trades {{
+        }
+        .cal-trades {
             font-size: 0.70rem;
             color: #000000;
             opacity: 0.85;
-        }}
-        .cal-week-summary {{
+        }
+        .cal-week-summary {
             font-size: 0.75rem;
             color: #000000;
             text-align: center;
-        }}
-        .cal-empty {{
-            background-color: transparent;
+        }
+        .cal-empty {
             border: none;
-        }}
+            background-color: transparent;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    cells = []
+    rows_html = []
 
     # Header row
-    for name in ["Mo", "Tu", "We", "Th", "Fr", "Week"]:
-        cells.append(f"<div class='cal-header'>{name}</div>")
+    header_cells = "".join(
+        f"<th class='cal-header-cell'>{name}</th>"
+        for name in ["Mo", "Tu", "We", "Th", "Fr", "Week"]
+    )
+    rows_html.append(f"<tr>{header_cells}</tr>")
 
     week_counter = 0
     # up to 6 rows (weeks)
@@ -209,12 +207,16 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         week_pnl = float(in_week["pnl_day"].sum()) if not in_week.empty else 0.0
         week_trades = int(in_week["n_trades"].sum()) if not in_week.empty else 0
 
+        row_cells = []
+
         # Mon–Fri cells
         for i_day in range(5):
             d = week_dates[i_day]  # Mon..Fri
 
             if d.month != month or d.year != year:
-                cells.append("<div class='cal-cell cal-empty'></div>")
+                row_cells.append(
+                    "<td class='cal-cell cal-empty'></td>"
+                )
                 continue
 
             stats = by_date.get(d)
@@ -232,19 +234,18 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             pnl_str = f"${pnl:,.2f}"
             trades_str = f"{int(n_trades)} trades"
 
-            cells.append(
-                f"""
-                <div class="cal-cell" style="background-color:{bg_color};">
-                    <div class="cal-day-label">{d.day}</div>
-                    <div style="text-align:center;">
-                        <div class="cal-pnl">{pnl_str}</div>
-                        <div class="cal-trades">{trades_str}</div>
-                    </div>
+            cell_html = f"""
+            <td class="cal-cell" style="background-color:{bg_color};">
+                <div class="cal-day-label">{d.day}</div>
+                <div style="text-align:center;">
+                    <div class="cal-pnl">{pnl_str}</div>
+                    <div class="cal-trades">{trades_str}</div>
                 </div>
-                """
-            )
+            </td>
+            """
+            row_cells.append(cell_html)
 
-        # Week total column (square tile)
+        # Week total column cell
         week_pnl_str = f"${week_pnl:,.2f}"
         if week_pnl > 0:
             week_bg = "#7fcf7f"
@@ -256,24 +257,26 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             week_bg = "#c4c4c4"
             week_pnl_color = "#000000"
 
-        cells.append(
-            f"""
-            <div class="cal-cell" style="background-color:{week_bg};">
-                <div class="cal-day-label">Week {week_counter}</div>
-                <div class="cal-week-summary">
-                    <div style="color:{week_pnl_color}; font-weight:700;">{week_pnl_str}</div>
-                    <div>{week_trades} trades</div>
-                </div>
+        week_cell_html = f"""
+        <td class="cal-cell" style="background-color:{week_bg};">
+            <div class="cal-day-label">Week {week_counter}</div>
+            <div class="cal-week-summary">
+                <div style="color:{week_pnl_color}; font-weight:700;">{week_pnl_str}</div>
+                <div>{week_trades} trades</div>
             </div>
-            """
-        )
+        </td>
+        """
+        row_cells.append(week_cell_html)
 
-    html = (
-        "<div class='cal-wrapper'><div class='cal-grid'>"
-        + "".join(cells)
-        + "</div></div>"
+        rows_html.append("<tr>" + "".join(row_cells) + "</tr>")
+
+    full_html = (
+        "<div class='cal-table-wrapper'>"
+        "<table class='cal-table'>"
+        + "".join(rows_html)
+        + "</table></div>"
     )
-    st.markdown(html, unsafe_allow_html=True)
+    st.markdown(full_html, unsafe_allow_html=True)
 
 
 # ========== MAIN UI ==========
