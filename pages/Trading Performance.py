@@ -345,13 +345,11 @@ def _add_to_group(trade_ids, group_id=None, new_group_name=None, notes=None):
         group_id = g["id"]
     if group_id and trade_ids:
         rows = [{"group_id": group_id, "trade_id": tid} for tid in trade_ids]
-        # also robust upsert in case unique index differs
         try:
             sb.table("tj_trade_group_members").upsert(
                 rows, on_conflict="group_id,trade_id"
             ).execute()
         except Exception:
-            # fallback: delete duplicates then insert
             (
                 sb.table("tj_trade_group_members")
                 .delete()
@@ -463,7 +461,6 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
         legs = len(gdf)
         qty = gdf["qty"].fillna(0).abs()
 
-        # VWAP Entry
         ok_e = gdf["entry_px"].notna()
         w_entry = qty.where(ok_e, 0)
         denom_e = w_entry.sum()
@@ -473,7 +470,6 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
                 (gdf["entry_px"].where(ok_e, 0) * qty).sum() / denom_e
             )
 
-        # VWAP Exit
         ok_x = gdf["exit_px"].notna()
         w_exit = qty.where(ok_x, 0)
         denom_x = w_exit.sum()
@@ -487,7 +483,6 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
         last_exit = gdf["exit_ts_est"].max()
         total_qty = float(gdf["qty"].fillna(0).sum())
 
-        # Net PnL
         pnl_sum = float(
             (gdf["pnl_net"].fillna(0) if "pnl_net" in gdf else 0).sum()
         )
@@ -523,7 +518,7 @@ def _classify_session(ts):
       - RTH IB:   09:30:00–10:29:59
       - RTH Morning: 10:30:00–11:59:59
       - Lunch:    12:00:00–13:29:59
-      - Afternoon:13:30:00–16:59:59
+      - Afternoon:13:30:00–17:59:59
     """
     if pd.isna(ts):
         return "Unknown"
@@ -552,21 +547,19 @@ def _classify_session(ts):
     if 12 * 3600 <= seconds <= 13 * 3600 + 29 * 60 + 59:
         return "Lunch (12:00–13:29:59)"
 
-    # Afternoon 13:30:00–16:59:59
-    if 13 * 3600 + 30 * 60 <= seconds <= 16 * 3600 + 59 * 60 + 59:
-        return "Afternoon (13:30–16:59:59)"
+    # Afternoon 13:30:00–17:59:59
+    if 13 * 3600 + 30 * 60 <= seconds <= 17 * 3600 + 59 * 60 + 59:
+        return "Afternoon (13:30–17:59:59)"
 
     return "Other"
 
 
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
-    Render a month calendar with one tile per day:
-      - Big PnL number (green/red)
-      - # trades
-      - On Saturdays: weekly PnL + # trades (Week 1, Week 2, ...)
-    `month_daily` must have columns: trade_date (datetime), pnl_day, n_trades.
-    `period` is a pandas Period('YYYY-MM').
+    Render a month calendar with:
+      - Columns: Mo, Tu, We, Th, Fr, Week Total
+      - One tile per weekday in the month with PnL + # trades
+      - Week Total column shows weekly PnL + # trades
     """
     if month_daily.empty:
         st.info("No trades for this month.")
@@ -590,126 +583,130 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         next_month_first = date(year, month + 1, 1)
     last_day = next_month_first - timedelta(days=1)
 
-    # Start on the Sunday before (or equal to) first_day
+    # Start on the Monday on/before first_day
     weekday_mon0 = first_day.weekday()  # Mon=0..Sun=6
-    sunday_offset = (weekday_mon0 + 1) % 7  # days back to Sunday
-    start_date = first_day - timedelta(days=sunday_offset)
+    start_date = first_day - timedelta(days=weekday_mon0)
 
-    # Calendar CSS
+    # Calendar CSS (lighter tiles, black font, tighter spacing)
     st.markdown(
         """
         <style>
         .cal-cell {
-            border: 1px solid #333;
-            border-radius: 6px;
-            padding: 4px 6px;
-            min-height: 90px;
+            border: 1px solid #cccccc;
+            border-radius: 4px;
+            padding: 2px 4px;
+            min-height: 65px;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            background-color: #141414;
+            background-color: #f0f0f0;
         }
         .cal-day-label {
-            font-size: 0.7rem;
-            opacity: 0.7;
+            font-size: 0.65rem;
+            color: #000000;
+            opacity: 0.8;
         }
         .cal-pnl {
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             font-weight: 700;
+            color: #000000;
         }
         .cal-trades {
             font-size: 0.7rem;
+            color: #000000;
             opacity: 0.8;
         }
         .cal-week-summary {
-            margin-top: 4px;
             font-size: 0.7rem;
+            color: #000000;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-    header_cols = st.columns(7)
-    for col, name in zip(header_cols, ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]):
+    header_cols = st.columns(6)
+    for col, name in zip(header_cols, ["Mo", "Tu", "We", "Th", "Fr", "Week"]):
         col.markdown(
             f"<div style='text-align:center; font-weight:600;'>{name}</div>",
             unsafe_allow_html=True,
         )
 
     week_counter = 0
-    # up to 6 rows
+    # up to 6 rows (weeks)
     for week_idx in range(6):
         row_start = start_date + timedelta(days=7 * week_idx)
-        week_dates = [row_start + timedelta(days=d) for d in range(7)]
+        week_dates = [row_start + timedelta(days=d) for d in range(7)]  # Mon..Sun
 
-        # Does this week touch the selected month?
+        # Does this week touch the selected month (Mon–Fri)?
         has_month_day = any(
-            (d.month == month and d.year == year) for d in week_dates
+            (d.month == month and d.year == year) for d in week_dates[:5]
         )
         if not has_month_day and row_start > last_day:
             break
-        if has_month_day:
-            week_counter += 1
+        if not has_month_day:
+            continue
+        week_counter += 1
 
-        # Week totals (only days in this month)
+        # Weekly totals only consider days in this month
         in_week = month_daily[
             (month_daily["trade_date"].dt.date >= week_dates[0])
-            & (month_daily["trade_date"].dt.date <= week_dates[-1])
+            & (month_daily["trade_date"].dt.date <= week_dates[4])
         ]
         week_pnl = float(in_week["pnl_day"].sum()) if not in_week.empty else 0.0
         week_trades = int(in_week["n_trades"].sum()) if not in_week.empty else 0
 
-        cols = st.columns(7)
-        for i, (col, d) in enumerate(zip(cols, week_dates)):
+        cols = st.columns(6)
+        # Mon–Fri cells
+        for i_day in range(5):
+            col = cols[i_day]
+            d = week_dates[i_day]  # Mon..Fri
+
             if d.month != month or d.year != year:
-                col.markdown("<div class='cal-cell'></div>", unsafe_allow_html=True)
+                # no cell at all for out-of-month dates
+                col.markdown("&nbsp;", unsafe_allow_html=True)
                 continue
 
             stats = by_date.get(d)
             pnl = stats["pnl_day"] if stats else 0.0
             n_trades = stats["n_trades"] if stats else 0
 
+            # Light backgrounds for green/red/flat
             if pnl > 0:
-                bg_color = "rgba(0, 128, 0, 0.35)"
-                pnl_color = "#7CFC00"
+                bg_color = "#d6f5d6"
             elif pnl < 0:
-                bg_color = "rgba(139, 0, 0, 0.45)"
-                pnl_color = "#FF6A6A"
+                bg_color = "#f5d6d6"
             else:
-                bg_color = "rgba(80, 80, 80, 0.45)"
-                pnl_color = "#CCCCCC"
+                bg_color = "#e4e4e4"
 
             pnl_str = f"${pnl:,.2f}"
             trades_str = f"{int(n_trades)} trades"
-
-            week_summary_html = ""
-            if i == 6 and has_month_day:
-                week_pnl_str = f"${week_pnl:,.2f}"
-                week_pnl_color = (
-                    "#7CFC00"
-                    if week_pnl > 0
-                    else ("#FF6A6A" if week_pnl < 0 else "#CCCCCC")
-                )
-                week_summary_html = f"""
-                    <div class='cal-week-summary'>
-                        <div><b>Week {week_counter}</b></div>
-                        <div style="color:{week_pnl_color};">{week_pnl_str}</div>
-                        <div>{week_trades} trades</div>
-                    </div>
-                """
 
             html = f"""
             <div class="cal-cell" style="background-color:{bg_color};">
                 <div class="cal-day-label">{d.day}</div>
                 <div style="text-align:center;">
-                    <div class="cal-pnl" style="color:{pnl_color};">{pnl_str}</div>
+                    <div class="cal-pnl">{pnl_str}</div>
                     <div class="cal-trades">{trades_str}</div>
                 </div>
-                {week_summary_html}
             </div>
             """
             col.markdown(html, unsafe_allow_html=True)
+
+        # Week total column
+        week_col = cols[5]
+        week_pnl_str = f"${week_pnl:,.2f}"
+        week_pnl_color = (
+            "#006400" if week_pnl > 0 else ("#8b0000" if week_pnl < 0 else "#000000")
+        )
+        week_html = f"""
+        <div class="cal-week-summary">
+            <div><b>Week {week_counter}</b></div>
+            <div style="color:{week_pnl_color}; font-weight:600;">{week_pnl_str}</div>
+            <div>{week_trades} trades</div>
+        </div>
+        """
+        week_col.markdown(week_html, unsafe_allow_html=True)
 
 
 # ---------- UI ----------
@@ -826,7 +823,7 @@ with tab_trades:
 
         edited = st.data_editor(
             df_display[view_cols],
-            use_container_width=True,
+            use_container_width=True,  # big main grid can stay full-width
             hide_index=True,
             column_config={
                 "selected": st.column_config.CheckboxColumn("✓"),
@@ -1009,6 +1006,8 @@ with tab_stats:
                 n_trades=("pnl_net", "size"),
                 wins=("pnl_net", lambda s: (s > 0).sum()),
                 losses=("pnl_net", lambda s: (s < 0).sum()),
+                avg_win=("pnl_net", lambda s: s[s > 0].mean() if (s > 0).any() else 0.0),
+                avg_loss=("pnl_net", lambda s: s[s < 0].mean() if (s < 0).any() else 0.0),
             )
             .reset_index()
         )
@@ -1037,31 +1036,33 @@ with tab_stats:
         )
         monthly_pnl_str = f"${monthly_pnl:,.2f}"
         monthly_color = (
-            "red" if monthly_pnl < 0 else ("green" if monthly_pnl > 0 else "white")
+            "red" if monthly_pnl < 0 else ("green" if monthly_pnl > 0 else "black")
         )
         st.markdown(
-            f"<h4 style='text-align:center;'>Monthly PnL: "
+            f"<h4 style='text-align:center; margin-bottom:0.25rem;'>Monthly PnL: "
             f"<span style='color:{monthly_color};'>{monthly_pnl_str}</span></h4>",
             unsafe_allow_html=True,
         )
 
         _render_pnl_calendar(month_daily, selected_period)
 
-        # Daily table: # Trades, PnL, Win rate (%)
+        # Daily table: # Trades, PnL, Avg Win, Avg Loss, Win rate (%)
         daily_display = month_daily.copy()
         daily_display["Win rate (%)"] = (daily_display["win_rate"] * 100).round(1)
+        daily_display["Date"] = daily_display["trade_date"].dt.strftime("%m/%d/%y")
         daily_display = daily_display.rename(
             columns={
-                "trade_date": "Date",
                 "n_trades": "# Trades",
                 "pnl_day": "PnL",
+                "avg_win": "Avg Win",
+                "avg_loss": "Avg Loss",
             }
-        )[["Date", "# Trades", "PnL", "Win rate (%)"]].sort_values(
+        )[["Date", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]].sort_values(
             "Date", ascending=False
         )
 
         st.markdown("#### Daily Stats")
-        st.dataframe(daily_display, use_container_width=True)
+        st.dataframe(daily_display, use_container_width=False)
 
         # Session stats
         st.markdown("### Session Performance")
@@ -1073,6 +1074,8 @@ with tab_stats:
                 wins=("pnl_net", lambda s: (s > 0).sum()),
                 losses=("pnl_net", lambda s: (s < 0).sum()),
                 pnl=("pnl_net", "sum"),
+                avg_win=("pnl_net", lambda s: s[s > 0].mean() if (s > 0).any() else 0.0),
+                avg_loss=("pnl_net", lambda s: s[s < 0].mean() if (s < 0).any() else 0.0),
             )
             .reset_index()
         )
@@ -1089,7 +1092,7 @@ with tab_stats:
             "RTH IB (09:30–10:29:59)",
             "RTH Morning (10:30–11:59:59)",
             "Lunch (12:00–13:29:59)",
-            "Afternoon (13:30–16:59:59)",
+            "Afternoon (13:30–17:59:59)",
             "Other",
         ]
         session_stats["Session"] = pd.Categorical(
@@ -1103,11 +1106,13 @@ with tab_stats:
                 columns={
                     "n_trades": "# Trades",
                     "pnl": "PnL",
+                    "avg_win": "Avg Win",
+                    "avg_loss": "Avg Loss",
                 }
-            )[["Session", "# Trades", "PnL", "Win rate (%)"]]
+            )[["Session", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]]
             .sort_values("Session")
         )
-        st.dataframe(session_display, use_container_width=True)
+        st.dataframe(session_display, use_container_width=False)
 
 # ---- Groups (collapsed + details, with hashtag filter) ----
 with tab_groups:
@@ -1173,7 +1178,7 @@ with tab_groups:
             st.markdown("**Collapsed (1 row per group)**")
             st.dataframe(
                 rshow[show_cols].sort_values(["first_entry"], ascending=[False]),
-                use_container_width=True,
+                use_container_width=False,
             )
 
             st.divider()
@@ -1226,7 +1231,7 @@ with tab_groups:
                 trade_cols = [c for c in trade_cols if c in gdf.columns]
                 st.dataframe(
                     gdf[trade_cols].sort_values("entry_ts_est"),
-                    use_container_width=True,
+                    use_container_width=False,
                 )
         else:
             st.info("You have groups, but no member trades yet.")
@@ -1306,6 +1311,6 @@ with tab_guards:
                 last_loss_exit = None
 
         if hits:
-            st.dataframe(pd.DataFrame(hits), use_container_width=True)
+            st.dataframe(pd.DataFrame(hits), use_container_width=False)
         else:
             st.success("No guardrail hits.")
