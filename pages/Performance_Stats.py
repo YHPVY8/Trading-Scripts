@@ -90,37 +90,32 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
     Render a month calendar with:
       - Columns: Mo, Tu, We, Th, Fr, Week
-      - One square-ish tile per weekday in the month with PnL + # trades
-      - Week column is also a tile with weekly PnL + # trades
-    Uses a simple HTML table for predictable sizing & layout.
+      - Square tiles per weekday
+      - Day number top-left
+      - PnL + trades vertically centered
+    Uses components.html so HTML is never escaped.
     """
     if month_daily.empty:
         st.info("No trades for this month.")
         return
 
-    # Map date -> row dict
+    # Map date -> stats
     month_daily = month_daily.copy()
     month_daily["date_only"] = month_daily["trade_date"].dt.date
-    by_date = month_daily.set_index("date_only")[["pnl_day", "n_trades"]].to_dict(
-        "index"
-    )
+    by_date = month_daily.set_index("date_only")[["pnl_day", "n_trades"]].to_dict("index")
 
     # Calendar bounds
-    first_ts = period.to_timestamp()  # first day of month
+    first_ts = period.to_timestamp()
     year, month = first_ts.year, first_ts.month
     first_day = date(year, month, 1)
-    # compute last day manually
-    if month == 12:
-        next_month_first = date(year + 1, 1, 1)
-    else:
-        next_month_first = date(year, month + 1, 1)
+
+    next_month_first = date(year + (month == 12), (month % 12) + 1, 1)
     last_day = next_month_first - timedelta(days=1)
 
-    # Start on the Monday on/before first_day
-    weekday_mon0 = first_day.weekday()  # Mon=0..Sun=6
+    weekday_mon0 = first_day.weekday()
     start_date = first_day - timedelta(days=weekday_mon0)
 
-    # CSS to keep cells compact & centered
+    # CSS — IMPORTANT: cal-cell stays a table cell (NOT flex!)
     css = """
     <style>
     .cal-table-wrapper {
@@ -135,34 +130,51 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     .cal-header-cell {
         text-align: center;
         font-weight: 600;
-        font-size: 0.80rem;
+        font-size: 0.85rem;
     }
     .cal-cell {
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
+        width: 120px;
+        height: 120px;
+        border-radius: 4px;
+        border: 1px solid #b0b0b0;
+        padding: 4px;
+        vertical-align: top;
+        position: relative; /* needed for absolute PnL centering */
+        font-size: 0.85rem;
+    }
+    .cal-day-label {
+        font-size: 1.0rem;
+        font-weight: 600;
+        color: #000;
+        opacity: 0.9;
+        margin-bottom: 2px;
     }
 
-    .cal-day-label {
-        align-self: flex-start;   /* keep day number in top-left */
-        margin-bottom: 4px;
+    /* NEW: Center PnL + trades vertically */
+    .cal-center-content {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -30%);  /* visually balanced */
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
     }
 
     .cal-pnl {
-        font-size: 0.95rem;
+        font-size: 1.15rem;
         font-weight: 700;
-        color: #000000;
+        color: #000;
     }
     .cal-trades {
         font-size: 0.95rem;
-        color: #000000;
         opacity: 0.85;
     }
     .cal-week-summary {
         font-size: 0.95rem;
-        color: #000000;
         text-align: center;
+        color: #000;
     }
     .cal-empty {
         border: none;
@@ -171,9 +183,9 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     </style>
     """
 
+    # Build HTML
     rows_html = []
 
-    # Header row
     header_cells = "".join(
         f"<th class='cal-header-cell'>{name}</th>"
         for name in ["Mo", "Tu", "We", "Th", "Fr", "Week"]
@@ -181,22 +193,20 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     rows_html.append(f"<tr>{header_cells}</tr>")
 
     week_counter = 0
-    # up to 6 rows (weeks)
+
     for week_idx in range(6):
         row_start = start_date + timedelta(days=7 * week_idx)
-        week_dates = [row_start + timedelta(days=d) for d in range(7)]  # Mon..Sun
+        week_dates = [row_start + timedelta(days=d) for d in range(7)]
 
-        # Does this week touch the selected month (Mon–Fri)?
-        has_month_day = any(
-            (d.month == month and d.year == year) for d in week_dates[:5]
-        )
+        # Does this row include a day of the selected month?
+        has_month_day = any(d.month == month and d.year == year for d in week_dates[:5])
         if not has_month_day and row_start > last_day:
             break
         if not has_month_day:
             continue
+
         week_counter += 1
 
-        # Weekly totals only consider Mon–Fri in this month
         in_week = month_daily[
             (month_daily["trade_date"].dt.date >= week_dates[0])
             & (month_daily["trade_date"].dt.date <= week_dates[4])
@@ -206,9 +216,9 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
 
         row_cells = []
 
-        # Mon–Fri cells
+        # Mon–Fri
         for i_day in range(5):
-            d = week_dates[i_day]  # Mon..Fri
+            d = week_dates[i_day]
 
             if d.month != month or d.year != year:
                 row_cells.append("<td class='cal-cell cal-empty'></td>")
@@ -218,43 +228,33 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             pnl = stats["pnl_day"] if stats else 0.0
             n_trades = stats["n_trades"] if stats else 0
 
-            # Darker green/red/flat backgrounds
-            if pnl > 0:
-                bg_color = "#8fd98f"
-            elif pnl < 0:
-                bg_color = "#e08b8b"
-            else:
-                bg_color = "#d0d0d0"
+            bg_color = "#8fd98f" if pnl > 0 else "#e08b8b" if pnl < 0 else "#d0d0d0"
 
             cell_html = textwrap.dedent(f"""
                 <td class="cal-cell" style="background-color:{bg_color};">
                     <div class="cal-day-label">{d.day}</div>
-                    <div style="text-align:center;">
+
+                    <div class="cal-center-content">
                         <div class="cal-pnl">${pnl:,.2f}</div>
-                        <div class="cal-trades">{int(n_trades)} trades</div>
+                        <div class="cal-trades">{n_trades} trades</div>
                     </div>
                 </td>
             """)
             row_cells.append(cell_html)
 
-        # Week total column cell
-        week_pnl_str = f"${week_pnl:,.2f}"
-        if week_pnl > 0:
-            week_bg = "#7fcf7f"
-            week_pnl_color = "#004d00"
-        elif week_pnl < 0:
-            week_bg = "#d16f6f"
-            week_pnl_color = "#550000"
-        else:
-            week_bg = "#c4c4c4"
-            week_pnl_color = "#000000"
+        # Weekly summary cell
+        week_bg = "#7fcf7f" if week_pnl > 0 else "#d16f6f" if week_pnl < 0 else "#c4c4c4"
+        week_color = "#004d00" if week_pnl > 0 else "#550000" if week_pnl < 0 else "#000"
 
         week_cell_html = textwrap.dedent(f"""
             <td class="cal-cell" style="background-color:{week_bg};">
                 <div class="cal-day-label">Week {week_counter}</div>
-                <div class="cal-week-summary">
-                    <div style="color:{week_pnl_color}; font-weight:700;">{week_pnl_str}</div>
-                    <div>{week_trades} trades</div>
+
+                <div class="cal-center-content">
+                    <div class="cal-week-summary" style="color:{week_color}; font-weight:700;">
+                        ${week_pnl:,.2f}
+                    </div>
+                    <div class="cal-trades">{week_trades} trades</div>
                 </div>
             </td>
         """)
@@ -269,7 +269,6 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         + "</table></div>"
     )
 
-    # 🔥 Use components.html so HTML is never escaped
     components.html(css + full_html, height=620, scrolling=False)
 
 
