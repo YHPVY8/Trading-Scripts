@@ -659,8 +659,10 @@ with tab_stats:
             x=alt.X("entry_ts_est:T", title="Entry time (EST)"),
             y=alt.Y("cum_pnl:Q", title="Cumulative PnL"),
             tooltip=["entry_ts_est:T", "cum_pnl:Q"]
-        ).properties(height=250, use_container_width=True)
+        ).properties(height=250)
+
         st.altair_chart(eq_chart, use_container_width=True)
+
 
         # Daily "calendar" summary
         st.markdown("### Daily PnL / Trades / Win Rate")
