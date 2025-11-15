@@ -301,7 +301,7 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------- UI ----------
-st.title("Trading Performance (EST)")
+st.title("Trading & Groups (EST)")
 tab_trades, tab_groups, tab_guards = st.tabs(["Trades", "Groups", "Guardrails"])
 
 # ---- Trades ----
