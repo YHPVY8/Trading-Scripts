@@ -138,25 +138,17 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         font-size: 0.80rem;
     }
     .cal-cell {
-        width: 120px;          /* your size */
-        height: 120px;         /* your size */
-        border-radius: 4px;
-        border: 1px solid #b0b0b0;
-        padding: 4px;
-
         display: flex;
         flex-direction: column;
-        justify-content: center;  /* vertical centering */
-        align-items: center;      /* horizontal centering */
-
-        font-size: 0.70rem;
+        justify-content: center;
+        align-items: center;
     }
 
     .cal-day-label {
-        font-size: 0.95rem;
-        color: #000000;
-        opacity: 0.8;
+        align-self: flex-start;   /* keep day number in top-left */
+        margin-bottom: 4px;
     }
+
     .cal-pnl {
         font-size: 0.95rem;
         font-weight: 700;
