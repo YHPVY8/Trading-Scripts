@@ -595,7 +595,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         """
         <style>
         .cal-wrapper {
-            max-width: 340px;   /* medium balanced width: tweak this number */
+            max-width: 240px;   /* medium balanced width: tweak this number */
             margin: 0 auto;
         }
         .cal-cell {
