@@ -557,9 +557,9 @@ def _classify_session(ts):
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
     Render a month calendar with:
-      - Columns: Mo, Tu, We, Th, Fr, Week Total
-      - One tile per weekday in the month with PnL + # trades
-      - Week Total column shows weekly PnL + # trades
+      - Columns: Mo, Tu, We, Th, Fr, Week
+      - One square tile per weekday in the month with PnL + # trades
+      - Week column is also a square tile with weekly PnL + # trades
     """
     if month_daily.empty:
         st.info("No trades for this month.")
@@ -587,19 +587,18 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     weekday_mon0 = first_day.weekday()  # Mon=0..Sun=6
     start_date = first_day - timedelta(days=weekday_mon0)
 
-    # Calendar CSS (lighter tiles, black font, tighter spacing)
+    # Calendar CSS (square tiles, darker shades, black font)
     st.markdown(
         """
         <style>
         .cal-cell {
-            border: 1px solid #cccccc;
+            border: 1px solid #b0b0b0;
             border-radius: 4px;
-            padding: 2px 4px;
-            min-height: 65px;
+            padding: 4px 4px;
+            aspect-ratio: 1 / 1;
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            background-color: #f0f0f0;
         }
         .cal-day-label {
             font-size: 0.65rem;
@@ -614,11 +613,12 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         .cal-trades {
             font-size: 0.7rem;
             color: #000000;
-            opacity: 0.8;
+            opacity: 0.85;
         }
         .cal-week-summary {
-            font-size: 0.7rem;
+            font-size: 0.75rem;
             color: #000000;
+            text-align: center;
         }
         </style>
         """,
@@ -648,7 +648,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             continue
         week_counter += 1
 
-        # Weekly totals only consider days in this month
+        # Weekly totals only consider Mon–Fri in this month
         in_week = month_daily[
             (month_daily["trade_date"].dt.date >= week_dates[0])
             & (month_daily["trade_date"].dt.date <= week_dates[4])
@@ -663,7 +663,6 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             d = week_dates[i_day]  # Mon..Fri
 
             if d.month != month or d.year != year:
-                # no cell at all for out-of-month dates
                 col.markdown("&nbsp;", unsafe_allow_html=True)
                 continue
 
@@ -671,13 +670,13 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             pnl = stats["pnl_day"] if stats else 0.0
             n_trades = stats["n_trades"] if stats else 0
 
-            # Light backgrounds for green/red/flat
+            # Darker green/red/flat backgrounds
             if pnl > 0:
-                bg_color = "#d6f5d6"
+                bg_color = "#8fd98f"
             elif pnl < 0:
-                bg_color = "#f5d6d6"
+                bg_color = "#e08b8b"
             else:
-                bg_color = "#e4e4e4"
+                bg_color = "#d0d0d0"
 
             pnl_str = f"${pnl:,.2f}"
             trades_str = f"{int(n_trades)} trades"
@@ -693,17 +692,26 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             """
             col.markdown(html, unsafe_allow_html=True)
 
-        # Week total column
+        # Week total column (square tile)
         week_col = cols[5]
         week_pnl_str = f"${week_pnl:,.2f}"
-        week_pnl_color = (
-            "#006400" if week_pnl > 0 else ("#8b0000" if week_pnl < 0 else "#000000")
-        )
+        if week_pnl > 0:
+            week_bg = "#7fcf7f"
+            week_pnl_color = "#004d00"
+        elif week_pnl < 0:
+            week_bg = "#d16f6f"
+            week_pnl_color = "#550000"
+        else:
+            week_bg = "#c4c4c4"
+            week_pnl_color = "#000000"
+
         week_html = f"""
-        <div class="cal-week-summary">
-            <div><b>Week {week_counter}</b></div>
-            <div style="color:{week_pnl_color}; font-weight:600;">{week_pnl_str}</div>
-            <div>{week_trades} trades</div>
+        <div class="cal-cell" style="background-color:{week_bg};">
+            <div class="cal-day-label">Week {week_counter}</div>
+            <div class="cal-week-summary">
+                <div style="color:{week_pnl_color}; font-weight:700;">{week_pnl_str}</div>
+                <div>{week_trades} trades</div>
+            </div>
         </div>
         """
         week_col.markdown(week_html, unsafe_allow_html=True)
@@ -823,7 +831,7 @@ with tab_trades:
 
         edited = st.data_editor(
             df_display[view_cols],
-            use_container_width=True,  # big main grid can stay full-width
+            use_container_width=True,  # big main grid stays full-width
             hide_index=True,
             column_config={
                 "selected": st.column_config.CheckboxColumn("✓"),
@@ -1113,6 +1121,43 @@ with tab_stats:
             .sort_values("Session")
         )
         st.dataframe(session_display, use_container_width=False)
+
+        # Symbol stats
+        st.markdown("### Symbol Performance")
+        df_stats_symbol = df_stats.copy()
+        df_stats_symbol["symbol"] = df_stats_symbol["symbol"].fillna("Unknown")
+        symbol_stats = (
+            df_stats_symbol.groupby("symbol")
+            .agg(
+                n_trades=("pnl_net", "size"),
+                wins=("pnl_net", lambda s: (s > 0).sum()),
+                losses=("pnl_net", lambda s: (s < 0).sum()),
+                pnl=("pnl_net", "sum"),
+                avg_win=("pnl_net", lambda s: s[s > 0].mean() if (s > 0).any() else 0.0),
+                avg_loss=("pnl_net", lambda s: s[s < 0].mean() if (s < 0).any() else 0.0),
+            )
+            .reset_index()
+        )
+        symbol_stats["win_rate"] = symbol_stats.apply(
+            lambda r: (r["wins"] / (r["wins"] + r["losses"]))
+            if (r["wins"] + r["losses"]) > 0
+            else 0.0,
+            axis=1,
+        )
+        symbol_stats["Win rate (%)"] = (symbol_stats["win_rate"] * 100).round(1)
+        symbol_display = (
+            symbol_stats.rename(
+                columns={
+                    "symbol": "Symbol",
+                    "n_trades": "# Trades",
+                    "pnl": "PnL",
+                    "avg_win": "Avg Win",
+                    "avg_loss": "Avg Loss",
+                }
+            )[["Symbol", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]]
+            .sort_values("Symbol")
+        )
+        st.dataframe(symbol_display, use_container_width=False)
 
 # ---- Groups (collapsed + details, with hashtag filter) ----
 with tab_groups:
