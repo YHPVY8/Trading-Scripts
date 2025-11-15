@@ -20,7 +20,7 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 # === Calendar size control ===
-CAL_MAX_WIDTH = 360  # <-- TWEAK THIS NUMBER to shrink/grow the entire calendar (px)
+CAL_MAX_WIDTH = 300  # <-- TWEAK THIS NUMBER to shrink/grow the entire calendar (px)
 
 
 # ---------- Utilities ----------
