@@ -1,4 +1,3 @@
-# pages/Trading Performance.py
 #!/usr/bin/env python3
 import io
 import re
@@ -461,6 +460,7 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
         legs = len(gdf)
         qty = gdf["qty"].fillna(0).abs()
 
+        # VWAP Entry
         ok_e = gdf["entry_px"].notna()
         w_entry = qty.where(ok_e, 0)
         denom_e = w_entry.sum()
@@ -470,6 +470,7 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
                 (gdf["entry_px"].where(ok_e, 0) * qty).sum() / denom_e
             )
 
+        # VWAP Exit
         ok_x = gdf["exit_px"].notna()
         w_exit = qty.where(ok_x, 0)
         denom_x = w_exit.sum()
@@ -483,6 +484,7 @@ def _rollup_by_group(members_df: pd.DataFrame) -> pd.DataFrame:
         last_exit = gdf["exit_ts_est"].max()
         total_qty = float(gdf["qty"].fillna(0).sum())
 
+        # Net PnL
         pnl_sum = float(
             (gdf["pnl_net"].fillna(0) if "pnl_net" in gdf else 0).sum()
         )
@@ -554,6 +556,7 @@ def _classify_session(ts):
     return "Other"
 
 
+# ===== Calendar renderer (medium balanced size) =====
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
     Render a month calendar with:
@@ -587,10 +590,14 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     weekday_mon0 = first_day.weekday()  # Mon=0..Sun=6
     start_date = first_day - timedelta(days=weekday_mon0)
 
-    # Calendar CSS (square tiles, darker shades, black font)
+    # Calendar CSS (square tiles, medium size, black font)
     st.markdown(
         """
         <style>
+        .cal-wrapper {
+            max-width: 520px;   /* medium balanced width: tweak this number */
+            margin: 0 auto;
+        }
         .cal-cell {
             border: 1px solid #b0b0b0;
             border-radius: 4px;
@@ -601,22 +608,22 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             justify-content: space-between;
         }
         .cal-day-label {
-            font-size: 0.95rem;
+            font-size: 0.85rem;
             color: #000000;
             opacity: 0.8;
         }
         .cal-pnl {
-            font-size: 0.95rem;
+            font-size: 0.85rem;
             font-weight: 700;
             color: #000000;
         }
         .cal-trades {
-            font-size: 0.85rem;
+            font-size: 0.75rem;
             color: #000000;
             opacity: 0.85;
         }
         .cal-week-summary {
-            font-size: 0.95rem;
+            font-size: 0.8rem;
             color: #000000;
             text-align: center;
         }
@@ -624,6 +631,9 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         """,
         unsafe_allow_html=True,
     )
+
+    # Wrap calendar in width-limited div
+    st.markdown("<div class='cal-wrapper'>", unsafe_allow_html=True)
 
     header_cols = st.columns(6)
     for col, name in zip(header_cols, ["Mo", "Tu", "We", "Th", "Fr", "Week"]):
@@ -716,6 +726,9 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         """
         week_col.markdown(week_html, unsafe_allow_html=True)
 
+    # Close wrapper
+    st.markdown("</div>", unsafe_allow_html=True)
+
 
 # ---------- UI ----------
 st.title("Trading Performance (EST)")
@@ -784,11 +797,14 @@ with tab_trades:
     if df.empty:
         st.info("No trades yet.")
     else:
+        # Toggle whether to auto-select newly uploaded rows
         st.checkbox("Auto-select newly imported trades", key="auto_select_after_upload")
 
+        # Attach tags
         tagmap = _fetch_tags_for(df["id"].tolist())
         df["tags"] = df["id"].map(lambda i: ", ".join(sorted(tagmap.get(i, []))))
 
+        # Display-friendly names
         rename_map = {
             "external_trade_id": "Trade ID",
             "entry_ts_est": "Entry (EST)",
@@ -796,9 +812,11 @@ with tab_trades:
             "pnl_net": "PnL (Net)",
         }
 
+        # Insert selection column
         if "selected" not in df.columns:
             df.insert(0, "selected", False)
 
+        # Only preselect after upload if toggle is ON
         if (
             st.session_state.auto_select_after_upload
             and st.session_state.last_imported_external_ids
@@ -831,7 +849,7 @@ with tab_trades:
 
         edited = st.data_editor(
             df_display[view_cols],
-            use_container_width=True,  # big main grid stays full-width
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "selected": st.column_config.CheckboxColumn("✓"),
@@ -857,6 +875,7 @@ with tab_trades:
             num_rows="fixed",
         )
 
+        # Map back to original names and bring internal id for persistence
         edited_back = edited.rename(columns={v: k for k, v in rename_map.items()})
         edited_back = edited_back.merge(
             df[["external_trade_id", "id", "r_multiple", "review_status"]],
@@ -865,6 +884,7 @@ with tab_trades:
             suffixes=("", "_old"),
         )
 
+        # Persist inline edits (r_multiple / review_status)
         diff_cols = ["r_multiple", "review_status"]
         to_update = []
         for _, r in edited_back.iterrows():
@@ -875,6 +895,7 @@ with tab_trades:
                 old = r.get(f"{c}_old")
                 if pd.isna(new) and pd.isna(old):
                     continue
+            # noqa: E501
                 if (pd.isna(new) and not pd.isna(old)) or (
                     not pd.isna(new) and pd.isna(old)
                 ) or (new != old):
@@ -890,6 +911,7 @@ with tab_trades:
             st.cache_data.clear()
 
         st.markdown("---")
+        # Bulk actions: comments, tags, grouping, ungroup
         selected_ids = edited_back.loc[
             edited_back.get("selected", False) == True, "id"
         ].tolist()
@@ -928,7 +950,7 @@ with tab_trades:
             elif gmode == "Create new (auto-name)":
                 suggested = _next_group_name()
                 st.caption(f"Suggested name: **{suggested}**")
-                new_group_name = suggested
+                new_group_name = suggested  # use suggested automatically
 
             do = st.form_submit_button("Apply")
 
@@ -940,11 +962,9 @@ with tab_trades:
                 _save_tags(selected_ids, tags)
 
             if gmode == "Add to existing" and existing:
-                _add_to_group(selected_ids, group_id=existing, notes=notes or None)
+                _add_to_group(selected_ids, group_id=existing, notes=notes if notes else None)
             elif gmode == "Create new (auto-name)":
-                _add_to_group(
-                    selected_ids, new_group_name=new_group_name, notes=notes or None
-                )
+                _add_to_group(selected_ids, new_group_name=new_group_name, notes=notes if notes else None)
             elif gmode == "Remove from group(s)":
                 _remove_from_groups(selected_ids)
 
@@ -1167,14 +1187,17 @@ with tab_groups:
     if not groups:
         st.info("No groups yet. Create them from the Trades tab after importing.")
     else:
+        # COLLAPSED TABLE (one line per group)
         roll = _rollup_by_group(mem_df)
 
+        # join names/notes
         name_map = {g["id"]: g["name"] for g in groups}
         notes_map = {g["id"]: g.get("notes") for g in groups}
         if not roll.empty:
             roll["name"] = roll["group_id"].map(name_map)
             roll["notes"] = roll["group_id"].map(notes_map)
 
+            # Filters
             c1, c2, c3 = st.columns([1, 2, 3])
             with c1:
                 day = st.date_input("Filter by day", value=None)
@@ -1186,11 +1209,13 @@ with tab_groups:
                 sym = st.text_input("Symbol filter (optional)", value="").strip().upper()
 
             rshow = roll.copy()
+            # day filter
             if day is not None:
                 try:
                     rshow = rshow[rshow["first_entry"].dt.date == day]
                 except Exception:
                     pass
+            # hashtag filter (all hashtags must appear in notes)
             if hashtag_str.strip():
                 tags = [
                     t.strip().lstrip("#").lower()
@@ -1203,6 +1228,7 @@ with tab_groups:
                     return all(("#" + t) in s for t in tags)
 
                 rshow = rshow[rshow["notes"].apply(_has_all_hashtags)]
+            # symbol filter
             if sym:
                 rshow = rshow[(rshow["symbol"].fillna("") == sym)]
 
@@ -1228,6 +1254,7 @@ with tab_groups:
 
             st.divider()
 
+            # DETAILS for a selected group
             st.markdown("**Group details**")
             label_to_id = {
                 f"{name_map.get(g['id'],'(unnamed)')} ({g['id'][:6]})": g["id"]
@@ -1240,6 +1267,7 @@ with tab_groups:
             if gdf.empty:
                 st.info("No member trades in this group.")
             else:
+                # summary metrics for the chosen group
                 groll = _rollup_by_group(gdf.assign(group_id=gid))
                 if not groll.empty:
                     row = groll.iloc[0]
