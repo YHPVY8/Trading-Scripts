@@ -138,8 +138,8 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         font-size: 0.80rem;
     }
     .cal-cell {
-        width: 95px;
-        height: 95px;
+        width: 120px;
+        height: 120px;
         border-radius: 4px;
         border: 1px solid #b0b0b0;
         padding: 2px;
