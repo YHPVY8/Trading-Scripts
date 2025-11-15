@@ -2,11 +2,13 @@
 # pages/02_Performance_Stats.py
 
 from datetime import date, timedelta
+import textwrap
 
 import pandas as pd
 import streamlit as st
 import altair as alt
 from supabase import create_client
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Performance Stats (EST)", layout="wide")
 
@@ -83,7 +85,7 @@ def _classify_session(ts):
     return "Other"
 
 
-# ===== Calendar renderer (HTML table – fixed medium size, centered) =====
+# ===== Calendar renderer (HTML table – medium size, centered) =====
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
     Render a month calendar with:
@@ -119,60 +121,57 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     start_date = first_day - timedelta(days=weekday_mon0)
 
     # CSS to keep cells compact & centered
-    st.markdown(
-        """
-        <style>
-        .cal-table-wrapper {
-            display: flex;
-            justify-content: center;
-            margin-top: 0.5rem;
-        }
-        .cal-table {
-            border-collapse: separate;
-            border-spacing: 4px;
-        }
-        .cal-header-cell {
-            text-align: center;
-            font-weight: 600;
-            font-size: 0.80rem;
-        }
-        .cal-cell {
-            width: 70px;
-            height: 70px;
-            border-radius: 4px;
-            border: 1px solid #b0b0b0;
-            padding: 2px;
-            font-size: 0.70rem;
-            vertical-align: top;
-        }
-        .cal-day-label {
-            font-size: 0.75rem;
-            color: #000000;
-            opacity: 0.8;
-        }
-        .cal-pnl {
-            font-size: 0.80rem;
-            font-weight: 700;
-            color: #000000;
-        }
-        .cal-trades {
-            font-size: 0.70rem;
-            color: #000000;
-            opacity: 0.85;
-        }
-        .cal-week-summary {
-            font-size: 0.75rem;
-            color: #000000;
-            text-align: center;
-        }
-        .cal-empty {
-            border: none;
-            background-color: transparent;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    css = """
+    <style>
+    .cal-table-wrapper {
+        display: flex;
+        justify-content: center;
+        margin-top: 0.5rem;
+    }
+    .cal-table {
+        border-collapse: separate;
+        border-spacing: 4px;
+    }
+    .cal-header-cell {
+        text-align: center;
+        font-weight: 600;
+        font-size: 0.80rem;
+    }
+    .cal-cell {
+        width: 60px;
+        height: 60px;
+        border-radius: 4px;
+        border: 1px solid #b0b0b0;
+        padding: 2px;
+        font-size: 0.70rem;
+        vertical-align: top;
+    }
+    .cal-day-label {
+        font-size: 0.75rem;
+        color: #000000;
+        opacity: 0.8;
+    }
+    .cal-pnl {
+        font-size: 0.80rem;
+        font-weight: 700;
+        color: #000000;
+    }
+    .cal-trades {
+        font-size: 0.70rem;
+        color: #000000;
+        opacity: 0.85;
+    }
+    .cal-week-summary {
+        font-size: 0.75rem;
+        color: #000000;
+        text-align: center;
+    }
+    .cal-empty {
+        border: none;
+        background-color: transparent;
+    }
+    </style>
+    """
 
     rows_html = []
 
@@ -214,9 +213,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             d = week_dates[i_day]  # Mon..Fri
 
             if d.month != month or d.year != year:
-                row_cells.append(
-                    "<td class='cal-cell cal-empty'></td>"
-                )
+                row_cells.append("<td class='cal-cell cal-empty'></td>")
                 continue
 
             stats = by_date.get(d)
@@ -231,18 +228,15 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             else:
                 bg_color = "#d0d0d0"
 
-            pnl_str = f"${pnl:,.2f}"
-            trades_str = f"{int(n_trades)} trades"
-
-            cell_html = f"""
-            <td class="cal-cell" style="background-color:{bg_color};">
-                <div class="cal-day-label">{d.day}</div>
-                <div style="text-align:center;">
-                    <div class="cal-pnl">{pnl_str}</div>
-                    <div class="cal-trades">{trades_str}</div>
-                </div>
-            </td>
-            """
+            cell_html = textwrap.dedent(f"""
+                <td class="cal-cell" style="background-color:{bg_color};">
+                    <div class="cal-day-label">{d.day}</div>
+                    <div style="text-align:center;">
+                        <div class="cal-pnl">${pnl:,.2f}</div>
+                        <div class="cal-trades">{int(n_trades)} trades</div>
+                    </div>
+                </td>
+            """)
             row_cells.append(cell_html)
 
         # Week total column cell
@@ -257,15 +251,15 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             week_bg = "#c4c4c4"
             week_pnl_color = "#000000"
 
-        week_cell_html = f"""
-        <td class="cal-cell" style="background-color:{week_bg};">
-            <div class="cal-day-label">Week {week_counter}</div>
-            <div class="cal-week-summary">
-                <div style="color:{week_pnl_color}; font-weight:700;">{week_pnl_str}</div>
-                <div>{week_trades} trades</div>
-            </div>
-        </td>
-        """
+        week_cell_html = textwrap.dedent(f"""
+            <td class="cal-cell" style="background-color:{week_bg};">
+                <div class="cal-day-label">Week {week_counter}</div>
+                <div class="cal-week-summary">
+                    <div style="color:{week_pnl_color}; font-weight:700;">{week_pnl_str}</div>
+                    <div>{week_trades} trades</div>
+                </div>
+            </td>
+        """)
         row_cells.append(week_cell_html)
 
         rows_html.append("<tr>" + "".join(row_cells) + "</tr>")
@@ -276,7 +270,9 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         + "".join(rows_html)
         + "</table></div>"
     )
-    st.markdown(full_html, unsafe_allow_html=True)
+
+    # 🔥 Use components.html so HTML is never escaped
+    components.html(css + full_html, height=320, scrolling=False)
 
 
 # ========== MAIN UI ==========
