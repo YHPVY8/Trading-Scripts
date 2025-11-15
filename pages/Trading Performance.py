@@ -606,12 +606,12 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             opacity: 0.8;
         }
         .cal-pnl {
-            font-size: 0.85rem;
+            font-size: 0.95rem;
             font-weight: 700;
             color: #000000;
         }
         .cal-trades {
-            font-size: 0.7rem;
+            font-size: 0.85rem;
             color: #000000;
             opacity: 0.85;
         }
