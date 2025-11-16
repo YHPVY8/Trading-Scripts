@@ -85,6 +85,27 @@ def _classify_session(ts):
     return "Other"
 
 
+# ===== Helper: Globex trade date (18:00–23:59 belongs to next day) =====
+def _globex_trade_date(ts: pd.Timestamp):
+    """
+    Globex trade date logic in EST:
+      - Trades from 18:00:00 to 23:59:59 are assigned to the *next* trade date
+      - Trades from 00:00:00 to 17:59:59 stay on the same calendar date
+    """
+    if pd.isna(ts):
+        return pd.NaT
+
+    t = ts.time()
+    seconds = t.hour * 3600 + t.minute * 60 + t.second
+
+    # If trade is after 18:00, move to next calendar day
+    if seconds >= 18 * 3600:
+        ts = ts + pd.Timedelta(days=1)
+
+    # Normalize to midnight of that effective trade date
+    return ts.normalize()
+
+
 # ===== Calendar renderer (HTML table – medium size, centered) =====
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     """
@@ -150,7 +171,7 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         margin-bottom: 2px;
     }
 
-    /* NEW: Center PnL + trades vertically */
+    /* Center PnL + trades vertically */
     .cal-center-content {
         position: absolute;
         top: 50%;
@@ -316,8 +337,8 @@ else:
     )
     st.altair_chart(eq_chart, use_container_width=True)
 
-    # ---- Daily summary ----
-    df_stats["trade_date"] = df_stats["entry_ts_est"].dt.normalize()
+    # ---- Daily summary (using Globex trade date) ----
+    df_stats["trade_date"] = df_stats["entry_ts_est"].apply(_globex_trade_date)
     daily = (
         df_stats.groupby("trade_date")
         .agg(
