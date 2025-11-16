@@ -18,6 +18,51 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 
+# ===== Helper: classify session for a timestamp (same as Performance Stats) =====
+def _classify_session(ts):
+    """
+    Session based on entry_ts_est (EST):
+      - Overnight: 18:00:00–03:59:59
+      - Premarket: 04:00:00–09:29:59
+      - RTH IB:   09:30:00–10:29:59
+      - RTH Morning: 10:30:00–11:59:59
+      - Lunch:    12:00:00–13:29:59
+      - Afternoon:13:30:00–17:59:59
+    """
+    if pd.isna(ts):
+        return "Unknown"
+
+    t = ts.time()
+    h, m, s = t.hour, t.minute, t.second
+    seconds = h * 3600 + m * 60 + s
+
+    # Overnight 18:00:00–23:59:59 or 00:00:00–03:59:59
+    if seconds >= 18 * 3600 or seconds <= 3 * 3600 + 59 * 60 + 59:
+        return "Overnight (18:00–03:59:59)"
+
+    # Premarket 04:00:00–09:29:59
+    if 4 * 3600 <= seconds <= 9 * 3600 + 29 * 60 + 59:
+        return "Premarket (04:00–09:29:59)"
+
+    # RTH IB 09:30:00–10:29:59
+    if 9 * 3600 + 30 * 60 <= seconds <= 10 * 3600 + 29 * 60 + 59:
+        return "RTH IB (09:30–10:29:59)"
+
+    # RTH Morning 10:30:00–11:59:59
+    if 10 * 3600 + 30 * 60 <= seconds <= 11 * 3600 + 59 * 60 + 59:
+        return "RTH Morning (10:30–11:59:59)"
+
+    # Lunch 12:00:00–13:29:59
+    if 12 * 3600 <= seconds <= 13 * 3600 + 29 * 60 + 59:
+        return "Lunch (12:00–13:29:59)"
+
+    # Afternoon 13:30:00–17:59:59
+    if 13 * 3600 + 30 * 60 <= seconds <= 17 * 3600 + 59 * 60 + 59:
+        return "Afternoon (13:30–17:59:59)"
+
+    return "Other"
+
+
 # ========= Helpers =========
 
 def load_trades() -> pd.DataFrame:
@@ -248,7 +293,7 @@ def simulate_daily_stop(df: pd.DataFrame, max_loss_per_session: float) -> pd.Dat
     return pd.concat(out_parts, ignore_index=True)
 
 
-# ========= Layout =========
+# ========= MAIN UI =========
 
 st.title("Overtrading & Tilt")
 
@@ -401,7 +446,7 @@ if result_col_for_slider is not None:
 else:
     st.info("No numeric result column (pnl_net / r_multiple) found for daily stop simulation.")
 
-# ---- Equity curve: with vs without tilt trades & daily stop ----
+# ---- Equity curve: With vs Without Tilt Trades / Daily Stop ----
 
 st.markdown("### Equity Curve: With vs Without Tilt Trades / Daily Stop")
 
@@ -459,30 +504,76 @@ if not curve.empty:
 else:
     st.info("Not enough data to build an equity curve.")
 
-# ---- Recent tilt candidates ----
+# ---- Session Performance (after Cooldown & Session Max Loss) ----
 
-st.markdown("### Recent Tilt Candidates")
+st.subheader("Session Performance (after Cooldown & Session Max Loss)")
 
-if tilt_trades.empty:
-    st.info("No tilt trades found for the current cooldown setting.")
+# Use the same effective trade set that feeds the "Exclude tilt + stop" path
+if max_loss_per_session > 0 and result_col_for_slider is not None:
+    effective_trades = stopped_trades
 else:
-    cols_to_show = [
-        "entry_ts_est",
-        "exit_ts_est",
-        "symbol",
-        "side",
-        "qty",
-        "pnl_net",
-        "mins_since_prev_exit",
-        "prev_result",
-        "prev_side",
-    ]
-    cols_to_show = [c for c in cols_to_show if c in tilt_trades.columns]
+    effective_trades = respected_trades  # cooldown only
 
-    st.dataframe(
-        tilt_trades.sort_values("entry_ts_est", ascending=False)
-        .head(50)[cols_to_show]
+if effective_trades.empty:
+    st.info("No trades remain after applying cooldown / session max loss.")
+else:
+    df_sess = effective_trades.copy()
+    # make sure pnl_net is numeric and non-null
+    df_sess["pnl_net"] = pd.to_numeric(df_sess["pnl_net"], errors="coerce").fillna(0.0)
+
+    df_sess["session"] = df_sess["entry_ts_est"].apply(_classify_session)
+    session_stats = (
+        df_sess.groupby("session")
+        .agg(
+            n_trades=("pnl_net", "size"),
+            wins=("pnl_net", lambda s: (s > 0).sum()),
+            losses=("pnl_net", lambda s: (s < 0).sum()),
+            pnl=("pnl_net", "sum"),
+            avg_win=(
+                "pnl_net",
+                lambda s: s[s > 0].mean() if (s > 0).any() else 0.0,
+            ),
+            avg_loss=(
+                "pnl_net",
+                lambda s: s[s < 0].mean() if (s < 0).any() else 0.0,
+            ),
+        )
+        .reset_index()
     )
+    session_stats["win_rate"] = session_stats.apply(
+        lambda r: (r["wins"] / (r["wins"] + r["losses"]))
+        if (r["wins"] + r["losses"]) > 0
+        else 0.0,
+        axis=1,
+    )
+
+    session_order = [
+        "Overnight (18:00–03:59:59)",
+        "Premarket (04:00–09:29:59)",
+        "RTH IB (09:30–10:29:59)",
+        "RTH Morning (10:30–11:59:59)",
+        "Lunch (12:00–13:29:59)",
+        "Afternoon (13:30–17:59:59)",
+        "Other",
+    ]
+    session_stats["Session"] = pd.Categorical(
+        session_stats["session"],
+        categories=session_order,
+        ordered=True,
+    )
+    session_stats["Win rate (%)"] = (session_stats["win_rate"] * 100).round(1)
+    session_display = (
+        session_stats.rename(
+            columns={
+                "n_trades": "# Trades",
+                "pnl": "PnL",
+                "avg_win": "Avg Win",
+                "avg_loss": "Avg Loss",
+            }
+        )[["Session", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]]
+        .sort_values("Session")
+    )
+    st.dataframe(session_display, use_container_width=False)
 
 st.divider()
 
