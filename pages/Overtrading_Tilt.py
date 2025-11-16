@@ -207,6 +207,47 @@ def build_equity_curve(df: pd.DataFrame, label: str) -> pd.DataFrame:
     return d[["entry_ts_est", "cum_result", "series"]]
 
 
+def simulate_daily_stop(df: pd.DataFrame, max_loss_per_session: float) -> pd.DataFrame:
+    """
+    Apply a max loss per session (trading day) to a trade stream.
+
+    - Uses pnl_net (or r_multiple) as result.
+    - Groups by entry date.
+    - For each day, keeps trades in chronological order until
+      cumulative result < -max_loss_per_session. The trade that
+      breaches the level is kept; all later trades that day are dropped.
+    """
+    if df.empty or max_loss_per_session <= 0:
+        return df
+
+    result_col = get_result_col(df)
+    if result_col is None:
+        return df
+
+    df_sorted = df.sort_values("entry_ts_est").copy()
+
+    out_parts = []
+    # Group by "session" = calendar day of entry
+    for _, g in df_sorted.groupby(df_sorted["entry_ts_est"].dt.date):
+        g = g.copy()
+        cum = g[result_col].cumsum()
+
+        breach = cum < -max_loss_per_session
+        if not breach.any():
+            # Never hit the stop → keep full day
+            out_parts.append(g)
+        else:
+            # First index where we breach the stop
+            first_breach_pos = int(np.argmax(breach.to_numpy()))
+            # Keep up to and including that trade
+            out_parts.append(g.iloc[: first_breach_pos + 1])
+
+    if not out_parts:
+        return df_sorted.iloc[0:0]
+
+    return pd.concat(out_parts, ignore_index=True)
+
+
 # ========= Layout =========
 
 st.title("Overtrading & Tilt")
@@ -328,14 +369,66 @@ with col_respected:
     st.metric("Avg Result", respected_metrics["avg_result"])
     st.metric("Total Result", respected_metrics["total_result"])
 
-# ---- Equity curve: with vs without tilt trades ----
+# ---- Max loss per session slider (after cooldown) ----
 
-st.markdown("### Equity Curve: With vs Without Tilt Trades")
+st.subheader("Session Max Loss (after Cooldown)")
 
+result_col_for_slider = get_result_col(tilt_df)
+max_loss_per_session = 0.0
+
+if result_col_for_slider is not None:
+    # Use tilt_df (all filtered trades) to calibrate slider range
+    daily_sums = (
+        tilt_df
+        .groupby(tilt_df["entry_ts_est"].dt.date)[result_col_for_slider]
+        .sum()
+    )
+
+    if not daily_sums.empty:
+        worst_loss = float(daily_sums.min())  # most negative day
+        # slider max: 50 or 120% of worst absolute loss, whichever is larger
+        slider_max = max(50.0, abs(worst_loss) * 1.2)
+    else:
+        slider_max = 50.0
+
+    max_loss_per_session = st.slider(
+        "Max loss per session (after cooldown; 0 = no stop)",
+        min_value=0.0,
+        max_value=float(round(slider_max, 2)),
+        value=0.0,
+        step=50.0 if slider_max > 100 else 10.0,
+    )
+else:
+    st.info("No numeric result column (pnl_net / r_multiple) found for daily stop simulation.")
+
+# ---- Equity curve: with vs without tilt trades & daily stop ----
+
+st.markdown("### Equity Curve: With vs Without Tilt Trades / Daily Stop")
+
+series_frames = []
+
+# 1) All trades (no cooldown, no stop)
 curve_all = build_equity_curve(tilt_df, "All trades")
-curve_no_tilt = build_equity_curve(respected_trades, "Exclude tilt trades")
+if not curve_all.empty:
+    series_frames.append(curve_all)
 
-curve = pd.concat([curve_all, curve_no_tilt], ignore_index=True)
+# 2) Exclude tilt trades (cooldown only)
+curve_no_tilt = build_equity_curve(respected_trades, "Exclude tilt trades")
+if not curve_no_tilt.empty:
+    series_frames.append(curve_no_tilt)
+
+# 3) Exclude tilt + daily max loss stop
+stopped_trades = respected_trades
+if max_loss_per_session > 0 and result_col_for_slider is not None:
+    stopped_trades = simulate_daily_stop(respected_trades, max_loss_per_session)
+    curve_stop = build_equity_curve(
+        stopped_trades,
+        f"Exclude tilt + stop {max_loss_per_session:.0f}"
+    )
+    if not curve_stop.empty:
+        series_frames.append(curve_stop)
+
+curve = pd.concat(series_frames, ignore_index=True) if series_frames else pd.DataFrame()
 
 if not curve.empty:
     chart = (
@@ -350,6 +443,19 @@ if not curve.empty:
         .interactive()
     )
     st.altair_chart(chart, use_container_width=True)
+
+    # --- Final result per series (metrics under the chart) ---
+    final_vals = (
+        curve.sort_values("entry_ts_est")
+             .groupby("series")
+             .tail(1)               # last point per series
+             .set_index("series")["cum_result"]
+    )
+
+    cols = st.columns(len(final_vals))
+    for col, (series_name, val) in zip(cols, final_vals.items()):
+        col.metric(f"Final result – {series_name}", round(val, 2))
+
 else:
     st.info("Not enough data to build an equity curve.")
 
