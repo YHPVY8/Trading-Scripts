@@ -255,10 +255,11 @@ tilt_trades = tilt_df[
     (tilt_df["mins_since_prev_exit"] <= cooldown_minutes)
 ]
 
-# Respected = everything else (or first trades / no previous loss)
-respected_trades = tilt_df[
+# Respected = everything else (all non-tilt trades)
+respected_trades = tilt_df.loc[
     tilt_df.index.difference(tilt_trades.index)
 ]
+
 
 all_metrics = basic_performance_metrics(tilt_df)
 tilt_metrics = basic_performance_metrics(tilt_trades)
