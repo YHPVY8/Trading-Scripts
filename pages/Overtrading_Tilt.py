@@ -9,17 +9,13 @@ import streamlit as st
 import altair as alt
 from supabase import create_client
 
-# ---- CONFIG ----
+# ===== CONFIG =====
 st.set_page_config(page_title="Overtrading & Tilt", layout="wide")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# IMPORTANT: set this in your .streamlit/secrets.toml
-# [general]
-# TJ_USER_ID = "your-uuid-here"
-USER_ID = st.secrets.get("TJ_USER_ID")
+USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 
 # ========= Helpers =========
