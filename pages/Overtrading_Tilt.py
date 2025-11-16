@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# pages/03_Overtrading_Tilt.py
+# pages/Overtrading_Tilt.py
 
 from datetime import date
 
@@ -24,13 +24,6 @@ def load_trades() -> pd.DataFrame:
     """
     Load tj_trades for the current user from Supabase.
     """
-    if USER_ID is None:
-        st.error(
-            "TJ_USER_ID is not set in secrets. "
-            "Add your user UUID to .streamlit/secrets.toml as TJ_USER_ID."
-        )
-        return pd.DataFrame()
-
     resp = (
         sb.table("tj_trades")
         .select("*")
@@ -49,7 +42,7 @@ def load_trades() -> pd.DataFrame:
     df["entry_ts_est"] = pd.to_datetime(df["entry_ts_est"])
     df["exit_ts_est"] = pd.to_datetime(df["exit_ts_est"])
 
-    # Make sure numerics are numeric
+    # Ensure numerics are numeric
     for col in ["pnl_gross", "fees", "pnl_net", "planned_risk", "r_multiple", "qty"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -57,27 +50,47 @@ def load_trades() -> pd.DataFrame:
     return df
 
 
+def get_result_col(df: pd.DataFrame) -> str | None:
+    """
+    Decide which column to use as 'result' of a trade.
+    Priority: pnl_net -> r_multiple -> None.
+    """
+    if "pnl_net" in df.columns:
+        return "pnl_net"
+    if "r_multiple" in df.columns:
+        return "r_multiple"
+    return None
+
+
 def add_prev_trade_info(trades: pd.DataFrame) -> pd.DataFrame:
     """
     Adds previous trade info and time gap between trades (in minutes).
     Uses:
-      entry_ts_est, exit_ts_est, side, r_multiple
+      entry_ts_est, exit_ts_est, side, and pnl_net (or r_multiple fallback).
     """
     if trades.empty:
         return trades
 
     df = trades.sort_values("entry_ts_est").copy()
 
+    # Time relationship
     df["prev_exit_ts_est"] = df["exit_ts_est"].shift(1)
-    df["prev_r_multiple"] = df["r_multiple"].shift(1)
-    df["prev_side"] = df["side"].shift(1)
-
     df["mins_since_prev_exit"] = (
         (df["entry_ts_est"] - df["prev_exit_ts_est"])
         .dt.total_seconds() / 60.0
     )
 
-    df["prev_was_loss"] = df["prev_r_multiple"] < 0
+    df["prev_side"] = df["side"].shift(1)
+
+    # Determine loss basis (pnl_net first, then r_multiple)
+    result_col = get_result_col(df)
+    if result_col is None:
+        df["prev_result"] = np.nan
+        df["prev_was_loss"] = False
+        return df
+
+    df["prev_result"] = df[result_col].shift(1)
+    df["prev_was_loss"] = df["prev_result"] < 0
 
     return df
 
@@ -85,46 +98,67 @@ def add_prev_trade_info(trades: pd.DataFrame) -> pd.DataFrame:
 def basic_performance_metrics(df: pd.DataFrame) -> dict:
     """
     Returns simple metrics for a trade subset.
-    Uses r_multiple.
+    Uses pnl_net if available; otherwise r_multiple.
     """
-    df = df.copy()
-    df = df[~df["r_multiple"].isna()]
-
     if df.empty:
         return {
             "trades": 0,
             "win_rate_%": 0.0,
-            "avg_R": 0.0,
-            "total_R": 0.0,
+            "avg_result": 0.0,
+            "total_result": 0.0,
         }
 
-    trades = len(df)
-    wins = (df["r_multiple"] > 0).sum()
+    result_col = get_result_col(df)
+    if result_col is None:
+        return {
+            "trades": len(df),
+            "win_rate_%": 0.0,
+            "avg_result": 0.0,
+            "total_result": 0.0,
+        }
+
+    d = df[~df[result_col].isna()].copy()
+    if d.empty:
+        return {
+            "trades": 0,
+            "win_rate_%": 0.0,
+            "avg_result": 0.0,
+            "total_result": 0.0,
+        }
+
+    trades = len(d)
+    wins = (d[result_col] > 0).sum()
 
     return {
         "trades": trades,
         "win_rate_%": round(100 * wins / trades, 1),
-        "avg_R": round(df["r_multiple"].mean(), 2),
-        "total_R": round(df["r_multiple"].sum(), 2),
+        "avg_result": round(d[result_col].mean(), 2),
+        "total_result": round(d[result_col].sum(), 2),
     }
 
 
 def loss_streaks_same_direction(df: pd.DataFrame) -> pd.DataFrame:
     """
     Finds sequences of consecutive losing trades in the same direction (side).
+    Uses pnl_net if available; otherwise r_multiple.
     Returns a DataFrame where each row is a streak.
-    Uses:
-      entry_ts_est, exit_ts_est, side, r_multiple
     """
     if df.empty:
         return pd.DataFrame(columns=[
             "streak_id", "side", "length",
-            "total_R", "avg_R", "start_time", "end_time"
+            "total_result", "avg_result", "start_time", "end_time"
+        ])
+
+    result_col = get_result_col(df)
+    if result_col is None:
+        return pd.DataFrame(columns=[
+            "streak_id", "side", "length",
+            "total_result", "avg_result", "start_time", "end_time"
         ])
 
     d = df.sort_values("entry_ts_est").copy()
 
-    is_loss = d["r_multiple"] < 0
+    is_loss = d[result_col] < 0
     same_side_as_prev = d["side"] == d["side"].shift(1)
 
     # new streak whenever NOT (loss & prev was loss & same side)
@@ -137,33 +171,40 @@ def loss_streaks_same_direction(df: pd.DataFrame) -> pd.DataFrame:
         .groupby("streak_id")
         .agg(
             side=("side", "first"),
-            length=("r_multiple", "size"),
-            total_R=("r_multiple", "sum"),
-            avg_R=("r_multiple", "mean"),
+            length=(result_col, "size"),
+            total_result=(result_col, "sum"),
+            avg_result=(result_col, "mean"),
             start_time=("entry_ts_est", "first"),
             end_time=("exit_ts_est", "last"),
         )
         .reset_index()
     )
 
-    streaks["avg_R"] = streaks["avg_R"].round(2)
-    streaks["total_R"] = streaks["total_R"].round(2)
+    streaks["avg_result"] = streaks["avg_result"].round(2)
+    streaks["total_result"] = streaks["total_result"].round(2)
 
     return streaks
 
 
 def build_equity_curve(df: pd.DataFrame, label: str) -> pd.DataFrame:
     """
-    Build cumulative R equity curve for plotting.
+    Build cumulative equity curve based on pnl_net (or r_multiple fallback).
     """
     if df.empty:
-        return pd.DataFrame(columns=["entry_ts_est", "cum_R", "series"])
+        return pd.DataFrame(columns=["entry_ts_est", "cum_result", "series"])
+
+    result_col = get_result_col(df)
+    if result_col is None:
+        return pd.DataFrame(columns=["entry_ts_est", "cum_result", "series"])
 
     d = df.sort_values("entry_ts_est").copy()
-    d = d[~d["r_multiple"].isna()]
-    d["cum_R"] = d["r_multiple"].cumsum()
+    d = d[~d[result_col].isna()]
+    if d.empty:
+        return pd.DataFrame(columns=["entry_ts_est", "cum_result", "series"])
+
+    d["cum_result"] = d[result_col].cumsum()
     d["series"] = label
-    return d[["entry_ts_est", "cum_R", "series"]]
+    return d[["entry_ts_est", "cum_result", "series"]]
 
 
 # ========= Layout =========
@@ -235,7 +276,7 @@ if filtered.empty:
 # Add previous trade info
 tilt_df = add_prev_trade_info(filtered)
 
-# ---- Cooldown /Tilt analysis ----
+# ---- Cooldown / Tilt analysis ----
 
 st.subheader("Cooldown after a Losing Trade")
 
@@ -255,11 +296,10 @@ tilt_trades = tilt_df[
     (tilt_df["mins_since_prev_exit"] <= cooldown_minutes)
 ]
 
-# Respected = everything else (all non-tilt trades)
+# Respected = everything else (non-tilt trades)
 respected_trades = tilt_df.loc[
     tilt_df.index.difference(tilt_trades.index)
 ]
-
 
 all_metrics = basic_performance_metrics(tilt_df)
 tilt_metrics = basic_performance_metrics(tilt_trades)
@@ -271,24 +311,24 @@ with col_all:
     st.caption("All trades (filtered)")
     st.metric("Trades", all_metrics["trades"])
     st.metric("Win rate (%)", all_metrics["win_rate_%"])
-    st.metric("Avg R", all_metrics["avg_R"])
-    st.metric("Total R", all_metrics["total_R"])
+    st.metric("Avg Result", all_metrics["avg_result"])
+    st.metric("Total Result", all_metrics["total_result"])
 
 with col_tilt:
     st.caption(f"‘Tilt’ trades (loss → re-entry ≤ {cooldown_minutes} min)")
     st.metric("Trades", tilt_metrics["trades"])
     st.metric("Win rate (%)", tilt_metrics["win_rate_%"])
-    st.metric("Avg R", tilt_metrics["avg_R"])
-    st.metric("Total R", tilt_metrics["total_R"])
+    st.metric("Avg Result", tilt_metrics["avg_result"])
+    st.metric("Total Result", tilt_metrics["total_result"])
 
 with col_respected:
     st.caption(f"Trades respecting cooldown > {cooldown_minutes} min")
     st.metric("Trades", respected_metrics["trades"])
     st.metric("Win rate (%)", respected_metrics["win_rate_%"])
-    st.metric("Avg R", respected_metrics["avg_R"])
-    st.metric("Total R", respected_metrics["total_R"])
+    st.metric("Avg Result", respected_metrics["avg_result"])
+    st.metric("Total Result", respected_metrics["total_result"])
 
-# ---- Equity curve with vs without tilt trades ----
+# ---- Equity curve: with vs without tilt trades ----
 
 st.markdown("### Equity Curve: With vs Without Tilt Trades")
 
@@ -303,9 +343,9 @@ if not curve.empty:
         .mark_line()
         .encode(
             x="entry_ts_est:T",
-            y="cum_R:Q",
+            y="cum_result:Q",
             color="series:N",
-            tooltip=["entry_ts_est:T", "cum_R:Q", "series:N"],
+            tooltip=["entry_ts_est:T", "cum_result:Q", "series:N"],
         )
         .interactive()
     )
@@ -313,7 +353,7 @@ if not curve.empty:
 else:
     st.info("Not enough data to build an equity curve.")
 
-# ---- Recent tilt candidates table ----
+# ---- Recent tilt candidates ----
 
 st.markdown("### Recent Tilt Candidates")
 
@@ -326,10 +366,9 @@ else:
         "symbol",
         "side",
         "qty",
-        "r_multiple",
         "pnl_net",
         "mins_since_prev_exit",
-        "prev_r_multiple",
+        "prev_result",
         "prev_side",
     ]
     cols_to_show = [c for c in cols_to_show if c in tilt_trades.columns]
