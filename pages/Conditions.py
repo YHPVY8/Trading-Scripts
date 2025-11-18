@@ -40,25 +40,24 @@ daily_agg = None
 y_subset = m_subset = w_subset = None  # for debugging
 
 try:
-    # Be explicit: get time/open/close ordered by time ascending
+    # IMPORTANT: get the MOST RECENT rows, then sort ascending in pandas
     perf_resp = (
         sb.table("daily_es")
           .select("time, open, close")
-          .order("time", desc=False)  # oldest -> newest
-          .limit(260)                 # last ~260 rows in chronological order
+          .order("time", desc=True)  # newest -> oldest in DB
+          .limit(260)                # most recent ~260 rows
           .execute()
     )
     perf_df = pd.DataFrame(perf_resp.data)
 
     if not perf_df.empty:
-        # Explicitly treat columns
         if not {"time", "open", "close"}.issubset(perf_df.columns):
             st.warning(
                 "Expected columns 'time', 'open', 'close' in `daily_es` for performance tiles. "
                 f"Columns available: {list(perf_df.columns)}"
             )
         else:
-            # Normalize to pure date and aggregate to one open/close per day
+            # Convert to date and aggregate; now these are the most recent dates
             perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
             perf_df = perf_df.dropna(subset=["time", "open", "close"])
 
@@ -71,11 +70,11 @@ try:
                         period_close=("close", "last"),
                     )
                     .reset_index()
-                    .sort_values("time")
+                    .sort_values("time")   # oldest -> newest of the most recent 260 days
                 )
 
                 if len(daily_agg) >= 1:
-                    # Latest date in the table
+                    # Latest date in the table (true latest because we just sorted ascending)
                     current_date = daily_agg["time"].iloc[-1]
 
                     # --- Day performance: latest close vs previous day's close ---
@@ -88,9 +87,9 @@ try:
                         else:
                             day_ret = np.nan
                     else:
-                        day_ret = np.nan  # only 1 day, no prior close
+                        day_ret = np.nan  # only 1 day
 
-                    # Prepare datetime series for year / month / ISO week filters
+                    # Prepare datetime series for filters
                     dt_series = pd.to_datetime(daily_agg["time"])
 
                     # === YTD: latest close vs first OPEN of the calendar year ===
@@ -132,7 +131,7 @@ c_year.metric("Year-to-date (C vs year O)",    _fmt_pct(ytd_ret))
 st.caption(
     "Day performance uses the latest close vs the previous day's close. "
     "Week/Month/Year-to-date use the latest close vs the FIRST open in that period, "
-    "based only on dates present in `daily_es`."
+    "based only on dates present in `daily_es` (most recent ~260 days)."
 )
 
 # ---- Debug for performance tiles ----
@@ -327,7 +326,6 @@ try:
         if not enr_df.empty:
             enr_df["time"] = pd.to_datetime(enr_df["time"], utc=True, errors="coerce")
             enr_df = enr_df.dropna(subset=["time"])
-            # Drop any duplicate times in enriched just in case
             enr_df = (
                 enr_df.sort_values("time")
                       .drop_duplicates(subset=["time"], keep="last")
@@ -382,7 +380,7 @@ if ("pHi" not in df.columns) or df["pHi"].isna().all() or \
         df["pLo"] = df["pLo"].where(df["pLo"].notna(), df["pLo_fallback"])
     df = df.drop(columns=[c for c in ["pHi_fallback","pLo_fallback"] if c in df.columns])
 
-# hi_pHi / lo_pLo from enriched hi_phi / lo_plo where available; fallback to computed deltas
+# hi_pHi / lo_pLo
 if "hi_phi" in df.columns and df["hi_phi"].notna().any():
     if "hi_pHi" not in df.columns:
         df["hi_pHi"] = df["hi_phi"]
@@ -458,7 +456,7 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
 
 daily = agg_daily(df)
 
-# Trailing comparisons (exclude current day via shift inside trailing_mean)
+# Trailing comparisons
 for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
     if col in daily.columns:
         daily[f"{col}_tw_avg"] = trailing_mean(daily[col], trailing_window)
