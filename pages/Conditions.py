@@ -9,7 +9,6 @@ from supabase import create_client
 # Page config
 # =========================
 st.set_page_config(page_title="Conditions", layout="wide")
-st.title("Market Conditions (30m)")
 
 # =========================
 # Supabase client
@@ -17,6 +16,98 @@ st.title("Market Conditions (30m)")
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# =========================
+# Daily performance snapshot from daily_es
+# =========================
+def _compute_period_return(
+    df: pd.DataFrame,
+    date_col: str,
+    close_col: str,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> float:
+    """
+    Close-to-close return over [start_date, end_date].
+    Returns NaN if not enough data.
+    """
+    mask = (df[date_col] >= start_date) & (df[date_col] <= end_date)
+    sub = df.loc[mask].sort_values(date_col)
+    if len(sub) < 2:
+        return np.nan
+    first_close = sub[close_col].iloc[0]
+    last_close  = sub[close_col].iloc[-1]
+    if pd.isna(first_close) or pd.isna(last_close) or first_close == 0:
+        return np.nan
+    return (last_close / first_close) - 1.0
+
+wtd_ret = mtd_ret = ytd_ret = np.nan
+try:
+    perf_resp = (
+        sb.table("daily_es")
+          .select("*")
+          .order("date", desc=True)
+          .limit(260)   # ~1 trading year
+          .execute()
+    )
+    perf_df = pd.DataFrame(perf_resp.data)
+    if not perf_df.empty:
+        # Detect date column
+        date_col = None
+        if "trade_date" in perf_df.columns:
+            date_col = "trade_date"
+        elif "date" in perf_df.columns:
+            date_col = "date"
+
+        # Detect close column
+        close_col = "close" if "close" in perf_df.columns else None
+
+        if date_col and close_col:
+            perf_df[date_col] = pd.to_datetime(perf_df[date_col]).dt.date
+            perf_df = perf_df.dropna(subset=[date_col, close_col])
+
+            if not perf_df.empty:
+                current_trade_date = perf_df[date_col].max()
+
+                # YTD
+                ytd_start = dt.date(current_trade_date.year, 1, 1)
+                ytd_ret   = _compute_period_return(
+                    perf_df, date_col, close_col, ytd_start, current_trade_date
+                )
+
+                # MTD
+                mtd_start = dt.date(current_trade_date.year, current_trade_date.month, 1)
+                mtd_ret   = _compute_period_return(
+                    perf_df, date_col, close_col, mtd_start, current_trade_date
+                )
+
+                # WTD (ISO week: Monday start)
+                weekday_index = current_trade_date.weekday()  # Monday = 0
+                wtd_start = current_trade_date - dt.timedelta(days=weekday_index)
+                wtd_ret   = _compute_period_return(
+                    perf_df, date_col, close_col, wtd_start, current_trade_date
+                )
+except Exception as e:
+    st.warning(f"Could not load daily_es for performance tiles: {e}")
+
+# =========================
+# Title + top tiles
+# =========================
+st.title("Market Conditions (30m)")
+
+t1, t2, t3 = st.columns(3)
+
+def _fmt_pct(x: float) -> str:
+    return "—" if pd.isna(x) else f"{x*100:,.1f}%"
+
+t1.metric("Week-to-date performance",  _fmt_pct(wtd_ret))
+t2.metric("Month-to-date performance", _fmt_pct(mtd_ret))
+t3.metric("Year-to-date performance",  _fmt_pct(ytd_ret))
+
+st.caption(
+    "Performance tiles use close-to-close returns from the `daily_es` table over the current "
+    "week, month, and calendar year to date."
+)
 
 # =========================
 # Controls
