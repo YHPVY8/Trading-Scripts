@@ -20,82 +20,108 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 # =========================
 # Daily performance snapshot from daily_es
 # =========================
-def _compute_period_return(
-    df: pd.DataFrame,
-    date_col: str,
-    close_col: str,
-    start_date: dt.date,
-    end_date: dt.date,
-) -> float:
+def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
     """
-    Close-to-close return over [start_date, end_date].
-    Returns NaN if not enough data.
+    Period return using first period_open vs last period_close in a subset,
+    where sub_df has columns ['period_open', 'period_close'] and is sorted by date.
+    Returns NaN if not enough data or bad values.
     """
-    mask = (df[date_col] >= start_date) & (df[date_col] <= end_date)
-    sub = df.loc[mask].sort_values(date_col)
-    if len(sub) < 2:
+    if sub_df is None or sub_df.empty or len(sub_df) < 2:
         return np.nan
-    first_close = sub[close_col].iloc[0]
-    last_close  = sub[close_col].iloc[-1]
-    if pd.isna(first_close) or pd.isna(last_close) or first_close == 0:
+    first_open = sub_df["period_open"].iloc[0]
+    last_close = sub_df["period_close"].iloc[-1]
+    if pd.isna(first_open) or pd.isna(last_close) or first_open == 0:
         return np.nan
-    return (last_close / first_close) - 1.0
+    return (last_close / first_open) - 1.0
 
-wtd_ret = mtd_ret = ytd_ret = np.nan
+day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
+
 try:
-    # Pull recent rows; we'll sort by date in pandas
+    # Pull recent rows; we'll sort and aggregate in pandas
     perf_resp = (
         sb.table("daily_es")
           .select("*")
-          .limit(260)   # ~1 trading year
+          .limit(260)   # ~1 trading year of rows (or more, depending on table)
           .execute()
     )
     perf_df = pd.DataFrame(perf_resp.data)
+
     if not perf_df.empty:
-        # Detect date column (now includes "time")
+        # Detect date column (includes "time")
         date_col = None
         for cand in ["trade_date", "date", "Date", "time", "Time"]:
             if cand in perf_df.columns:
                 date_col = cand
                 break
 
-        # Detect close column
+        # Detect open/close columns
+        open_col = None
+        for cand in ["open", "Open", "o", "O"]:
+            if cand in perf_df.columns:
+                open_col = cand
+                break
+
         close_col = None
         for cand in ["close", "Close", "settle", "settlement"]:
             if cand in perf_df.columns:
                 close_col = cand
                 break
 
-        if date_col and close_col:
+        if date_col and open_col and close_col:
+            # Normalize to pure date and aggregate to one open/close per day
             perf_df[date_col] = pd.to_datetime(perf_df[date_col]).dt.date
-            perf_df = perf_df.dropna(subset=[date_col, close_col])
+            perf_df = perf_df.dropna(subset=[date_col, open_col, close_col])
 
             if not perf_df.empty:
-                # Make sure we use the latest date in the table
-                perf_df = perf_df.sort_values(date_col)
-                current_trade_date = perf_df[date_col].max()
-
-                # YTD
-                ytd_start = dt.date(current_trade_date.year, 1, 1)
-                ytd_ret   = _compute_period_return(
-                    perf_df, date_col, close_col, ytd_start, current_trade_date
+                daily_agg = (
+                    perf_df
+                    .groupby(date_col)
+                    .agg(
+                        period_open=(open_col, "first"),
+                        period_close=(close_col, "last"),
+                    )
+                    .reset_index()
+                    .sort_values(date_col)
                 )
 
-                # MTD
-                mtd_start = dt.date(current_trade_date.year, current_trade_date.month, 1)
-                mtd_ret   = _compute_period_return(
-                    perf_df, date_col, close_col, mtd_start, current_trade_date
-                )
+                if len(daily_agg) >= 2:
+                    # Current date = latest date in the table
+                    current_date = daily_agg[date_col].iloc[-1]
+                    prev_date    = daily_agg[date_col].iloc[-2]
 
-                # WTD (ISO week: Monday start)
-                weekday_index = current_trade_date.weekday()  # Monday = 0
-                wtd_start = current_trade_date - dt.timedelta(days=weekday_index)
-                wtd_ret   = _compute_period_return(
-                    perf_df, date_col, close_col, wtd_start, current_trade_date
-                )
+                    # --- Day performance: close vs previous day's close (unchanged logic) ---
+                    last_two = daily_agg.tail(2)
+                    prev_close = last_two["period_close"].iloc[0]
+                    last_close = last_two["period_close"].iloc[1]
+                    if prev_close and not pd.isna(prev_close) and prev_close != 0:
+                        day_ret = (last_close / prev_close) - 1.0
+                    else:
+                        day_ret = np.nan
+
+                    # Prepare datetime series for year / month / ISO week filters
+                    dt_series = pd.to_datetime(daily_agg[date_col])
+
+                    # === YTD: latest close vs first OPEN of the year ===
+                    current_year = current_date.year
+                    y_mask = dt_series.dt.year == current_year
+                    y_subset = daily_agg.loc[y_mask]
+                    ytd_ret = _period_return_open_to_close(y_subset)
+
+                    # === MTD: latest close vs first OPEN of the month ===
+                    current_month = current_date.month
+                    m_mask = (dt_series.dt.year == current_year) & (dt_series.dt.month == current_month)
+                    m_subset = daily_agg.loc[m_mask]
+                    mtd_ret = _period_return_open_to_close(m_subset)
+
+                    # === WTD (ISO week): latest close vs first OPEN of the ISO week ===
+                    iso = dt_series.dt.isocalendar()
+                    current_iso_year, current_iso_week, _ = current_date.isocalendar()
+                    w_mask = (iso["year"] == current_iso_year) & (iso["week"] == current_iso_week)
+                    w_subset = daily_agg.loc[w_mask]
+                    wtd_ret = _period_return_open_to_close(w_subset)
         else:
             st.warning(
-                "Could not find suitable date/close columns in `daily_es` for performance tiles. "
+                "Could not find suitable date/open/close columns in `daily_es` for performance tiles. "
                 f"Columns available: {list(perf_df.columns)}"
             )
 except Exception as e:
@@ -106,18 +132,20 @@ except Exception as e:
 # =========================
 st.title("Market Conditions (30m)")
 
-t1, t2, t3 = st.columns(3)
+c_day, c_week, c_month, c_year = st.columns(4)
 
 def _fmt_pct(x: float) -> str:
     return "—" if pd.isna(x) else f"{x*100:,.1f}%"
 
-t1.metric("Week-to-date performance",  _fmt_pct(wtd_ret))
-t2.metric("Month-to-date performance", _fmt_pct(mtd_ret))
-t3.metric("Year-to-date performance",  _fmt_pct(ytd_ret))
+c_day.metric("Day performance (C vs prior C)",      _fmt_pct(day_ret))
+c_week.metric("Week-to-date (C vs week O)",         _fmt_pct(wtd_ret))
+c_month.metric("Month-to-date (C vs month O)",      _fmt_pct(mtd_ret))
+c_year.metric("Year-to-date (C vs year O)",         _fmt_pct(ytd_ret))
 
 st.caption(
-    "Performance tiles use close-to-close returns from the `daily_es` table over the current "
-    "week, month, and calendar year to date."
+    "Day performance uses the latest close vs the previous day's close. "
+    "Week/Month/Year-to-date use the latest close vs the FIRST open in that period, "
+    "based only on dates present in `daily_es`."
 )
 
 # =========================
@@ -494,7 +522,7 @@ k1.metric(
 k2.metric(
     f"Cum Vol vs {trailing_window}d",
     f"{row.get('cum_vol_at_cutoff', np.nan):,.0f}" if pd.notna(row.get('cum_vol_at_cutoff')) else "—",
-    None  # you can add % vs trailing later if you want
+    None
 )
 k3.metric(
     "Session High (cutoff)",
@@ -569,7 +597,7 @@ for name in tbl.columns:
         fmt[name] = "{:,.2f}"
 
 def color_pos_neg(val):
-    if pd.isna(val): 
+    if pd.isna(val):
         return ""
     try:
         v = float(val)
