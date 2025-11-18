@@ -43,30 +43,36 @@ def _compute_period_return(
 
 wtd_ret = mtd_ret = ytd_ret = np.nan
 try:
+    # Pull recent rows; we'll sort by date in pandas
     perf_resp = (
         sb.table("daily_es")
           .select("*")
-          .order("date", desc=True)
           .limit(260)   # ~1 trading year
           .execute()
     )
     perf_df = pd.DataFrame(perf_resp.data)
     if not perf_df.empty:
-        # Detect date column
+        # Detect date column (now includes "time")
         date_col = None
-        if "trade_date" in perf_df.columns:
-            date_col = "trade_date"
-        elif "date" in perf_df.columns:
-            date_col = "date"
+        for cand in ["trade_date", "date", "Date", "time", "Time"]:
+            if cand in perf_df.columns:
+                date_col = cand
+                break
 
         # Detect close column
-        close_col = "close" if "close" in perf_df.columns else None
+        close_col = None
+        for cand in ["close", "Close", "settle", "settlement"]:
+            if cand in perf_df.columns:
+                close_col = cand
+                break
 
         if date_col and close_col:
             perf_df[date_col] = pd.to_datetime(perf_df[date_col]).dt.date
             perf_df = perf_df.dropna(subset=[date_col, close_col])
 
             if not perf_df.empty:
+                # Make sure we use the latest date in the table
+                perf_df = perf_df.sort_values(date_col)
                 current_trade_date = perf_df[date_col].max()
 
                 # YTD
@@ -87,6 +93,11 @@ try:
                 wtd_ret   = _compute_period_return(
                     perf_df, date_col, close_col, wtd_start, current_trade_date
                 )
+        else:
+            st.warning(
+                "Could not find suitable date/close columns in `daily_es` for performance tiles. "
+                f"Columns available: {list(perf_df.columns)}"
+            )
 except Exception as e:
     st.warning(f"Could not load daily_es for performance tiles: {e}")
 
