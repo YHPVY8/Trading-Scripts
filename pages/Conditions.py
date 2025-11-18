@@ -20,13 +20,14 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 # =========================
 # Daily performance snapshot from daily_es
 # =========================
+
 def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
     """
-    Period return using first period_open vs last period_close in a subset,
-    where sub_df has columns ['period_open', 'period_close'] and is sorted by date.
-    Returns NaN if not enough data or bad values.
+    Period return using first period_open vs last period_close in a subset.
+    If there's only one row, it's (close / open) - 1 for that day.
+    Returns NaN if no data or bad values.
     """
-    if sub_df is None or sub_df.empty or len(sub_df) < 2:
+    if sub_df is None or sub_df.empty:
         return np.nan
     first_open = sub_df["period_open"].iloc[0]
     last_close = sub_df["period_close"].iloc[-1]
@@ -35,95 +36,81 @@ def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
     return (last_close / first_open) - 1.0
 
 day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
+daily_agg = None
+y_subset = m_subset = w_subset = None  # for debugging
 
 try:
-    # Pull recent rows; we'll sort and aggregate in pandas
+    # Be explicit: get time/open/close ordered by time ascending
     perf_resp = (
         sb.table("daily_es")
-          .select("*")
-          .limit(260)   # ~1 trading year of rows (or more, depending on table)
+          .select("time, open, close")
+          .order("time", desc=False)  # oldest -> newest
+          .limit(260)                 # last ~260 rows in chronological order
           .execute()
     )
     perf_df = pd.DataFrame(perf_resp.data)
 
     if not perf_df.empty:
-        # Detect date column (includes "time")
-        date_col = None
-        for cand in ["trade_date", "date", "Date", "time", "Time"]:
-            if cand in perf_df.columns:
-                date_col = cand
-                break
-
-        # Detect open/close columns
-        open_col = None
-        for cand in ["open", "Open", "o", "O"]:
-            if cand in perf_df.columns:
-                open_col = cand
-                break
-
-        close_col = None
-        for cand in ["close", "Close", "settle", "settlement"]:
-            if cand in perf_df.columns:
-                close_col = cand
-                break
-
-        if date_col and open_col and close_col:
+        # Explicitly treat columns
+        if not {"time", "open", "close"}.issubset(perf_df.columns):
+            st.warning(
+                "Expected columns 'time', 'open', 'close' in `daily_es` for performance tiles. "
+                f"Columns available: {list(perf_df.columns)}"
+            )
+        else:
             # Normalize to pure date and aggregate to one open/close per day
-            perf_df[date_col] = pd.to_datetime(perf_df[date_col]).dt.date
-            perf_df = perf_df.dropna(subset=[date_col, open_col, close_col])
+            perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
+            perf_df = perf_df.dropna(subset=["time", "open", "close"])
 
             if not perf_df.empty:
                 daily_agg = (
                     perf_df
-                    .groupby(date_col)
+                    .groupby("time")
                     .agg(
-                        period_open=(open_col, "first"),
-                        period_close=(close_col, "last"),
+                        period_open=("open", "first"),
+                        period_close=("close", "last"),
                     )
                     .reset_index()
-                    .sort_values(date_col)
+                    .sort_values("time")
                 )
 
-                if len(daily_agg) >= 2:
-                    # Current date = latest date in the table
-                    current_date = daily_agg[date_col].iloc[-1]
-                    prev_date    = daily_agg[date_col].iloc[-2]
+                if len(daily_agg) >= 1:
+                    # Latest date in the table
+                    current_date = daily_agg["time"].iloc[-1]
 
-                    # --- Day performance: close vs previous day's close (unchanged logic) ---
-                    last_two = daily_agg.tail(2)
-                    prev_close = last_two["period_close"].iloc[0]
-                    last_close = last_two["period_close"].iloc[1]
-                    if prev_close and not pd.isna(prev_close) and prev_close != 0:
-                        day_ret = (last_close / prev_close) - 1.0
+                    # --- Day performance: latest close vs previous day's close ---
+                    if len(daily_agg) >= 2:
+                        last_two = daily_agg.tail(2)
+                        prev_close = last_two["period_close"].iloc[0]
+                        last_close = last_two["period_close"].iloc[1]
+                        if prev_close and not pd.isna(prev_close) and prev_close != 0:
+                            day_ret = (last_close / prev_close) - 1.0
+                        else:
+                            day_ret = np.nan
                     else:
-                        day_ret = np.nan
+                        day_ret = np.nan  # only 1 day, no prior close
 
                     # Prepare datetime series for year / month / ISO week filters
-                    dt_series = pd.to_datetime(daily_agg[date_col])
+                    dt_series = pd.to_datetime(daily_agg["time"])
 
-                    # === YTD: latest close vs first OPEN of the year ===
+                    # === YTD: latest close vs first OPEN of the calendar year ===
                     current_year = current_date.year
                     y_mask = dt_series.dt.year == current_year
-                    y_subset = daily_agg.loc[y_mask]
+                    y_subset = daily_agg.loc[y_mask].copy()
                     ytd_ret = _period_return_open_to_close(y_subset)
 
-                    # === MTD: latest close vs first OPEN of the month ===
+                    # === MTD: latest close vs first OPEN of the calendar month ===
                     current_month = current_date.month
                     m_mask = (dt_series.dt.year == current_year) & (dt_series.dt.month == current_month)
-                    m_subset = daily_agg.loc[m_mask]
+                    m_subset = daily_agg.loc[m_mask].copy()
                     mtd_ret = _period_return_open_to_close(m_subset)
 
                     # === WTD (ISO week): latest close vs first OPEN of the ISO week ===
-                    iso = dt_series.dt.isocalendar()
-                    current_iso_year, current_iso_week, _ = current_date.isocalendar()
-                    w_mask = (iso["year"] == current_iso_year) & (iso["week"] == current_iso_week)
-                    w_subset = daily_agg.loc[w_mask]
+                    iso_all = dt_series.dt.isocalendar()
+                    curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
+                    w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
+                    w_subset = daily_agg.loc[w_mask].copy()
                     wtd_ret = _period_return_open_to_close(w_subset)
-        else:
-            st.warning(
-                "Could not find suitable date/open/close columns in `daily_es` for performance tiles. "
-                f"Columns available: {list(perf_df.columns)}"
-            )
 except Exception as e:
     st.warning(f"Could not load daily_es for performance tiles: {e}")
 
@@ -137,16 +124,38 @@ c_day, c_week, c_month, c_year = st.columns(4)
 def _fmt_pct(x: float) -> str:
     return "—" if pd.isna(x) else f"{x*100:,.1f}%"
 
-c_day.metric("Day performance (C vs prior C)",      _fmt_pct(day_ret))
-c_week.metric("Week-to-date (C vs week O)",         _fmt_pct(wtd_ret))
-c_month.metric("Month-to-date (C vs month O)",      _fmt_pct(mtd_ret))
-c_year.metric("Year-to-date (C vs year O)",         _fmt_pct(ytd_ret))
+c_day.metric("Day performance (C vs prior C)", _fmt_pct(day_ret))
+c_week.metric("Week-to-date (C vs week O)",    _fmt_pct(wtd_ret))
+c_month.metric("Month-to-date (C vs month O)", _fmt_pct(mtd_ret))
+c_year.metric("Year-to-date (C vs year O)",    _fmt_pct(ytd_ret))
 
 st.caption(
     "Day performance uses the latest close vs the previous day's close. "
     "Week/Month/Year-to-date use the latest close vs the FIRST open in that period, "
     "based only on dates present in `daily_es`."
 )
+
+# ---- Debug for performance tiles ----
+with st.expander("Performance tiles debug (daily_es)"):
+    if daily_agg is not None:
+        st.markdown("**Last 10 aggregated days (time, open, close):**")
+        st.dataframe(daily_agg.tail(10))
+
+        if w_subset is not None and not w_subset.empty:
+            st.markdown("**Current week subset used for WTD (time, open, close):**")
+            st.dataframe(w_subset)
+        else:
+            st.write("No rows found for current ISO week subset (WTD).")
+
+        if m_subset is not None and not m_subset.empty:
+            st.markdown("**Current month subset used for MTD (time, open, close):**")
+            st.dataframe(m_subset)
+
+        if y_subset is not None and not y_subset.empty:
+            st.markdown("**Current year subset used for YTD (time, open, close):**")
+            st.dataframe(y_subset)
+    else:
+        st.write("No aggregated daily data available from daily_es.")
 
 # =========================
 # Controls
