@@ -122,11 +122,10 @@ c_day, c_week, c_month, c_year = st.columns(4)
 
 def _perf_tile(container, label: str, ret: float):
     """
-    Render a single big percent tile:
-    - Green background for positive
-    - Red background for negative
-    - Gray background for zero / NaN
-    Text is black and centered.
+    Clean Streamlit tile with:
+    - green/red/gray background
+    - centered layout
+    - no raw CSS leaking
     """
     if pd.isna(ret):
         display = "—"
@@ -134,53 +133,46 @@ def _perf_tile(container, label: str, ret: float):
     else:
         display = f"{ret*100:+.1f}%"
         if ret > 0:
-            bg = "#BBF7D0"  # green-200
+            bg = "#86EFAC"  # green-300
         elif ret < 0:
-            bg = "#FECACA"  # red-200
+            bg = "#FCA5A5"  # red-300
         else:
             bg = "#E5E7EB"  # gray-200
 
-    container.markdown(
-        f"""
-        <div style="
-            padding: 0.75rem 1rem;
-            border-radius: 0.75rem;
-            background-color: {bg};
-            border: 1px solid #9CA3AF;
-            height: 90px;
-
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-        ">
-          <div style="
-              font-size: 0.8rem;
-              color: #4B5563;
-              text-transform: uppercase;
-              letter-spacing: 0.05em;
-              margin-bottom: 0.15rem;
-              text-align: center;
-          ">
-            {label}
-          </div>
-          <div style="
-              font-size: 1.6rem;
-              font-weight: 600;
-              color: #111827;
-              text-align: center;
-          ">
-            {display}
-          </div>
+    html = f"""
+        <div style="background-color:{bg};
+                    border:1px solid #9CA3AF;
+                    border-radius:12px;
+                    height:90px;
+                    padding:8px 12px;
+                    display:flex;
+                    flex-direction:column;
+                    justify-content:center;
+                    align-items:center;">
+            <div style="color:#374151;
+                        font-size:0.75rem;
+                        text-transform:uppercase;
+                        letter-spacing:0.05em;
+                        text-align:center;
+                        margin-bottom:2px;">
+                {label}
+            </div>
+            <div style="color:#111827;
+                        font-size:1.6rem;
+                        font-weight:600;
+                        text-align:center;">
+                {display}
+            </div>
         </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """
+
+    container.markdown(html, unsafe_allow_html=True)
 
 _perf_tile(c_day,   "Day performance",   day_ret)
 _perf_tile(c_week,  "Week-to-date",      wtd_ret)
 _perf_tile(c_month, "Month-to-date",     mtd_ret)
 _perf_tile(c_year,  "Year-to-date",      ytd_ret)
+
 
 # =========================
 # Controls
