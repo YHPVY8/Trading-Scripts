@@ -151,6 +151,7 @@ st.caption(
     "Metric tiles use the delta sign to show green/red based on the return."
 )
 
+
 # =========================
 # Controls
 # =========================
