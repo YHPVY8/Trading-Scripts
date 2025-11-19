@@ -125,7 +125,6 @@ def _perf_tile(container, label: str, ret: float):
     Clean Streamlit tile with:
     - green/red/gray background
     - centered layout
-    - no raw CSS leaking
     """
     if pd.isna(ret):
         display = "—"
@@ -172,7 +171,6 @@ _perf_tile(c_day,   "Day performance",   day_ret)
 _perf_tile(c_week,  "Week-to-date",      wtd_ret)
 _perf_tile(c_month, "Month-to-date",     mtd_ret)
 _perf_tile(c_year,  "Year-to-date",      ytd_ret)
-
 
 # =========================
 # Controls
@@ -576,6 +574,195 @@ st.caption(
     "Trailing averages exclude the current day and are computed on the same filtered data "
     "(full-day or as-of), so comparisons are apples-to-apples."
 )
+
+# ======================================================
+# Range vs prior RTH (Option A) + Moving averages (B, E)
+# ======================================================
+st.markdown("### Intraday Context: Prior RTH Range & Moving Averages")
+
+col_range, col_ma_cards, col_ma_ladder = st.columns([2, 2, 2])
+
+# ----- helper: range position bar (Option A) -----
+def _render_range_position_bar(container, current_price, rth_low, rth_high):
+    if pd.isna(current_price) or pd.isna(rth_low) or pd.isna(rth_high) or rth_high <= rth_low:
+        container.info("Prior RTH range not available.")
+        return
+
+    span = rth_high - rth_low
+    pct = (current_price - rth_low) / span
+    pct = max(0.0, min(1.0, pct))  # clamp 0–1
+
+    marker_left = pct * 100.0
+
+    html = f"""
+        <div style="font-size:0.9rem; margin-bottom:4px;">
+            Current vs prior RTH range
+        </div>
+        <div style="margin-bottom:6px; font-size:0.8rem; color:#4B5563;">
+            RTH Low: {rth_low:.2f} &nbsp;&nbsp; Current: {current_price:.2f} &nbsp;&nbsp; RTH High: {rth_high:.2f}
+        </div>
+        <div style="position:relative; height:24px; border-radius:999px; background:linear-gradient(90deg,#FCA5A5,#E5E7EB,#FCA5A5);">
+            <div style="
+                position:absolute;
+                top:0;
+                bottom:0;
+                left:{marker_left:.1f}%;
+                width:2px;
+                background-color:#111827;
+            "></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:0.75rem; color:#6B7280; margin-top:4px;">
+            <span>Below low</span>
+            <span>Inside prior RTH</span>
+            <span>Above high</span>
+        </div>
+    """
+    container.markdown(html, unsafe_allow_html=True)
+
+# ----- helper: MA cards (Option B) -----
+def _render_ma_cards(container, ma_rows):
+    if not ma_rows:
+        container.info("No moving average columns found in es_30m.")
+        return
+
+    container.markdown("**MA snapshot (cards)**")
+    c1, c2 = container.columns(2)
+    cols = [c1, c2]
+
+    for i, ma in enumerate(ma_rows):
+        label = ma["label"]
+        val = ma["value"]
+        dist = ma["dist"]
+        if pd.isna(val) or pd.isna(dist):
+            text = "N/A"
+            bg = "#E5E7EB"
+        else:
+            text = f"{val:.2f} ({dist:+.1f} pts)"
+            if dist > 0:
+                bg = "#BBF7D0"  # green-200
+            elif dist < 0:
+                bg = "#FECACA"  # red-200
+            else:
+                bg = "#E5E7EB"
+
+        html = f"""
+            <div style="background-color:{bg};
+                        border:1px solid #D1D5DB;
+                        border-radius:10px;
+                        padding:8px 10px;
+                        margin-bottom:6px;">
+                <div style="font-size:0.8rem; color:#4B5563; margin-bottom:2px;">
+                    {label}
+                </div>
+                <div style="font-size:1rem; font-weight:600; color:#111827;">
+                    {text}
+                </div>
+            </div>
+        """
+        cols[i % 2].markdown(html, unsafe_allow_html=True)
+
+# ----- helper: MA ladder (Option E) -----
+def _render_ma_ladder(container, ma_rows):
+    if not ma_rows:
+        container.info("No moving average columns found in es_30m.")
+        return
+
+    container.markdown("**MA distance ladder**")
+
+    # Compute max abs distance for scaling
+    dists = [abs(m["dist"]) for m in ma_rows if not pd.isna(m["dist"])]
+    max_abs = max(dists) if dists else 0.0
+    if max_abs == 0:
+        max_abs = 1.0
+
+    rows_html = ""
+    for ma in ma_rows:
+        label = ma["label"]
+        dist = ma["dist"]
+        if pd.isna(dist):
+            bar_width = 0
+            color = "#E5E7EB"
+            dist_text = "N/A"
+        else:
+            frac = min(1.0, abs(dist) / max_abs)
+            bar_width = 5 + frac * 95  # at least some visible bar
+            if dist > 0:
+                color = "#16A34A"  # green-600
+            elif dist < 0:
+                color = "#DC2626"  # red-600
+            else:
+                color = "#6B7280"
+            dist_text = f"{dist:+.1f} pts"
+
+        rows_html += f"""
+            <div style="margin-bottom:4px;">
+                <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#374151;">
+                    <span>{label}</span>
+                    <span>{dist_text}</span>
+                </div>
+                <div style="height:8px; background-color:#E5E7EB; border-radius:999px; overflow:hidden;">
+                    <div style="width:{bar_width:.1f}%; height:100%; background-color:{color};"></div>
+                </div>
+            </div>
+        """
+
+    container.markdown(f"<div>{rows_html}</div>", unsafe_allow_html=True)
+
+# ----- build data needed for these visuals -----
+current_close = row.get("day_close", np.nan)
+
+# Prior RTH range (from es_trade_day_summary)
+prev_rth_low = prev_rth_high = np.nan
+try:
+    # assumes es_trade_day_summary has trade_date, rth_high, rth_low
+    summ_resp = (
+        sb.table("es_trade_day_summary")
+          .select("trade_date,rth_high,rth_low")
+          .lte("trade_date", row["trade_date"].isoformat())
+          .order("trade_date", desc=True)
+          .limit(10)
+          .execute()
+    )
+    summ_df = pd.DataFrame(summ_resp.data)
+    if not summ_df.empty:
+        summ_df["trade_date"] = pd.to_datetime(summ_df["trade_date"]).dt.date
+        latest_date = row["trade_date"]
+        prev_mask = summ_df["trade_date"] < latest_date
+        if prev_mask.any():
+            prev_row = summ_df.loc[prev_mask].sort_values("trade_date").iloc[-1]
+        else:
+            # fallback: use latest available as "prior"
+            prev_row = summ_df.sort_values("trade_date").iloc[-1]
+        prev_rth_low = prev_row.get("rth_low", np.nan)
+        prev_rth_high = prev_row.get("rth_high", np.nan)
+except Exception as e:
+    st.warning(f"Could not load es_trade_day_summary for prior RTH range: {e}")
+
+_render_range_position_bar(col_range, current_close, prev_rth_low, prev_rth_high)
+
+# Moving averages for the latest bar of the latest trade_day
+ma_rows = []
+try:
+    latest_bars = df[df["trade_day"] == latest_td]
+    if not latest_bars.empty:
+        last_bar = latest_bars.iloc[-1]
+        price = last_bar.get("close", np.nan)
+
+        ma_candidates = ["5MA", "10MA", "20MA", "50MA", "200MA"]
+        ma_cols = [c for c in ma_candidates if c in df.columns]
+
+        for col in ma_cols:
+            val = last_bar.get(col, np.nan)
+            dist = np.nan
+            if pd.notna(price) and pd.notna(val):
+                dist = price - val
+            ma_rows.append({"label": col, "value": val, "dist": dist})
+
+except Exception as e:
+    st.warning(f"Could not compute MA context: {e}")
+
+_render_ma_cards(col_ma_cards, ma_rows)
+_render_ma_ladder(col_ma_ladder, ma_rows)
 
 # =========================
 # Table (last N trade days)
