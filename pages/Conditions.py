@@ -116,7 +116,7 @@ except Exception as e:
 # =========================
 # Title + top tiles
 # =========================
-st.title("Market Conditions (30m)")
+st.title("Market Conditions")
 
 c_day, c_week, c_month, c_year = st.columns(4)
 
@@ -144,20 +144,13 @@ c_week.metric("Week-to-date",    wtd_val,   wtd_delta)
 c_month.metric("Month-to-date", mtd_val,   mtd_delta)
 c_year.metric("Year-to-date",    ytd_val,   ytd_delta)
 
-#st.caption(
-   # "Day performance uses the latest close vs the previous day's close. "
-   # "Week/Month/Year-to-date use the latest close vs the FIRST open in that period, "
-   # "based only on dates present in `daily_es` (most recent ~260 days). "
-   # "Metric tiles use the delta sign to show green/red based on the return."
-#)
-
 
 # =========================
 # Controls
 # =========================
 c1, c2, c3, c4, c5 = st.columns([1,1,1,1,1.3])
 with c1:
-    symbol = st.text_input("Symbol (display-only)", value="ES")
+    symbol = st.text_input("Symbol", value="ES")
 with c2:
     lookback_days = st.number_input("Load last N calendar days", 30, 3650, 240, 30)
 with c3:
