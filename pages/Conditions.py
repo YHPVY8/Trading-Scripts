@@ -139,10 +139,10 @@ wtd_val, wtd_delta   = _metric_display(wtd_ret)
 mtd_val, mtd_delta   = _metric_display(mtd_ret)
 ytd_val, ytd_delta   = _metric_display(ytd_ret)
 
-c_day.metric("Day performance (C vs prior C)", day_val,   day_delta)
-c_week.metric("Week-to-date (C vs week O)",    wtd_val,   wtd_delta)
-c_month.metric("Month-to-date (C vs month O)", mtd_val,   mtd_delta)
-c_year.metric("Year-to-date (C vs year O)",    ytd_val,   ytd_delta)
+c_day.metric("Day performance", day_val,   day_delta)
+c_week.metric("Week-to-date",    wtd_val,   wtd_delta)
+c_month.metric("Month-to-date", mtd_val,   mtd_delta)
+c_year.metric("Year-to-date",    ytd_val,   ytd_delta)
 
 st.caption(
     "Day performance uses the latest close vs the previous day's close. "
