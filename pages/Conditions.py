@@ -144,12 +144,12 @@ c_week.metric("Week-to-date",    wtd_val,   wtd_delta)
 c_month.metric("Month-to-date", mtd_val,   mtd_delta)
 c_year.metric("Year-to-date",    ytd_val,   ytd_delta)
 
-st.caption(
-    "Day performance uses the latest close vs the previous day's close. "
-    "Week/Month/Year-to-date use the latest close vs the FIRST open in that period, "
-    "based only on dates present in `daily_es` (most recent ~260 days). "
-    "Metric tiles use the delta sign to show green/red based on the return."
-)
+#st.caption(
+   # "Day performance uses the latest close vs the previous day's close. "
+   # "Week/Month/Year-to-date use the latest close vs the FIRST open in that period, "
+   # "based only on dates present in `daily_es` (most recent ~260 days). "
+   # "Metric tiles use the delta sign to show green/red based on the return."
+#)
 
 
 # =========================
