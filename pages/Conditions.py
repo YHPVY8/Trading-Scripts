@@ -714,10 +714,10 @@ current_close = row.get("day_close", np.nan)
 # Prior RTH range (from es_trade_day_summary)
 prev_rth_low = prev_rth_high = np.nan
 try:
-    # assumes es_trade_day_summary has trade_date, rth_high, rth_low
+    # NOTE: columns in DB are "RTH Hi" and "RTH Lo" (with spaces & caps)
     summ_resp = (
         sb.table("es_trade_day_summary")
-          .select("trade_date,rth_high,rth_low")
+          .select('trade_date,"RTH Hi","RTH Lo"')
           .lte("trade_date", row["trade_date"].isoformat())
           .order("trade_date", desc=True)
           .limit(10)
@@ -733,8 +733,10 @@ try:
         else:
             # fallback: use latest available as "prior"
             prev_row = summ_df.sort_values("trade_date").iloc[-1]
-        prev_rth_low = prev_row.get("rth_low", np.nan)
-        prev_rth_high = prev_row.get("rth_high", np.nan)
+
+        # Access using the exact column names from the table
+        prev_rth_low = prev_row.get("RTH Lo", np.nan)
+        prev_rth_high = prev_row.get("RTH Hi", np.nan)
 except Exception as e:
     st.warning(f"Could not load es_trade_day_summary for prior RTH range: {e}")
 
