@@ -122,44 +122,53 @@ c_day, c_week, c_month, c_year = st.columns(4)
 
 def _perf_tile(container, label: str, ret: float):
     """
-    Render a single big colored percent tile:
-    - Green for positive
-    - Red for negative
-    - Gray for zero / NaN
+    Render a single big percent tile:
+    - Green background for positive
+    - Red background for negative
+    - Gray background for zero / NaN
+    Text is black and centered.
     """
     if pd.isna(ret):
         display = "—"
-        color = "#9CA3AF"  # gray
+        bg = "#E5E7EB"   # gray-200
     else:
         display = f"{ret*100:+.1f}%"
         if ret > 0:
-            color = "#16a34a"  # green-600
+            bg = "#BBF7D0"  # green-200
         elif ret < 0:
-            color = "#dc2626"  # red-600
+            bg = "#FECACA"  # red-200
         else:
-            color = "#9CA3AF"  # gray
+            bg = "#E5E7EB"  # gray-200
 
     container.markdown(
         f"""
         <div style="
             padding: 0.75rem 1rem;
             border-radius: 0.75rem;
-            background-color: #111827;
-            border: 1px solid #374151;
+            background-color: {bg};
+            border: 1px solid #9CA3AF;
+            height: 90px;
+
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
         ">
           <div style="
               font-size: 0.8rem;
-              color: #9CA3AF;
+              color: #4B5563;
               text-transform: uppercase;
               letter-spacing: 0.05em;
-              margin-bottom: 0.25rem;
+              margin-bottom: 0.15rem;
+              text-align: center;
           ">
             {label}
           </div>
           <div style="
               font-size: 1.6rem;
               font-weight: 600;
-              color: {color};
+              color: #111827;
+              text-align: center;
           ">
             {display}
           </div>
