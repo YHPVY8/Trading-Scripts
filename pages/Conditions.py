@@ -37,7 +37,7 @@ def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
 
 day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
 daily_agg = None
-y_subset = m_subset = w_subset = None  # for debugging
+y_subset = m_subset = w_subset = None  # (kept for clarity, not shown)
 
 try:
     # IMPORTANT: get the MOST RECENT rows, then sort ascending in pandas
@@ -123,38 +123,33 @@ c_day, c_week, c_month, c_year = st.columns(4)
 def _fmt_pct(x: float) -> str:
     return "—" if pd.isna(x) else f"{x*100:,.1f}%"
 
-c_day.metric("Day performance (C vs prior C)", _fmt_pct(day_ret))
-c_week.metric("Week-to-date (C vs week O)",    _fmt_pct(wtd_ret))
-c_month.metric("Month-to-date (C vs month O)", _fmt_pct(mtd_ret))
-c_year.metric("Year-to-date (C vs year O)",    _fmt_pct(ytd_ret))
+def _metric_display(ret: float):
+    """
+    Returns (value_str, delta_str) for st.metric.
+    Delta is what controls green/red arrows in Streamlit.
+    """
+    if pd.isna(ret):
+        return "—", None
+    val = _fmt_pct(ret)
+    delta = f"{ret*100:+.1f}%"
+    return val, delta
+
+day_val, day_delta   = _metric_display(day_ret)
+wtd_val, wtd_delta   = _metric_display(wtd_ret)
+mtd_val, mtd_delta   = _metric_display(mtd_ret)
+ytd_val, ytd_delta   = _metric_display(ytd_ret)
+
+c_day.metric("Day performance (C vs prior C)", day_val,   day_delta)
+c_week.metric("Week-to-date (C vs week O)",    wtd_val,   wtd_delta)
+c_month.metric("Month-to-date (C vs month O)", mtd_val,   mtd_delta)
+c_year.metric("Year-to-date (C vs year O)",    ytd_val,   ytd_delta)
 
 st.caption(
     "Day performance uses the latest close vs the previous day's close. "
     "Week/Month/Year-to-date use the latest close vs the FIRST open in that period, "
-    "based only on dates present in `daily_es` (most recent ~260 days)."
+    "based only on dates present in `daily_es` (most recent ~260 days). "
+    "Metric tiles use the delta sign to show green/red based on the return."
 )
-
-# ---- Debug for performance tiles ----
-with st.expander("Performance tiles debug (daily_es)"):
-    if daily_agg is not None:
-        st.markdown("**Last 10 aggregated days (time, open, close):**")
-        st.dataframe(daily_agg.tail(10))
-
-        if w_subset is not None and not w_subset.empty:
-            st.markdown("**Current week subset used for WTD (time, open, close):**")
-            st.dataframe(w_subset)
-        else:
-            st.write("No rows found for current ISO week subset (WTD).")
-
-        if m_subset is not None and not m_subset.empty:
-            st.markdown("**Current month subset used for MTD (time, open, close):**")
-            st.dataframe(m_subset)
-
-        if y_subset is not None and not y_subset.empty:
-            st.markdown("**Current year subset used for YTD (time, open, close):**")
-            st.dataframe(y_subset)
-    else:
-        st.write("No aggregated daily data available from daily_es.")
 
 # =========================
 # Controls
@@ -280,7 +275,8 @@ if not latest_day_df.empty:
 
 # =========================
 # Optional: As-of cutoff filtering (trade_day aware)
-# Keeps bars: (trade_day-1 @ 18:00) → (trade_day @ HH:MM)
+# Keeps bars: (trade_day-1 @ 18:00) → (trade_day @ HH:MM) for EVERY trade_day
+# So prior days are also truncated at the same intraday cutoff -> apples-to-apples.
 # =========================
 if mode == "As-of time snapshot":
     cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
@@ -456,11 +452,18 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
 
 daily = agg_daily(df)
 
-# Trailing comparisons
+# Trailing comparisons (apples-to-apples because scope already respects Full/As-of mode)
 for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
     if col in daily.columns:
-        daily[f"{col}_tw_avg"] = trailing_mean(daily[col], trailing_window)
-        daily[f"{col}_pct_vs_tw"] = (daily[col] - daily[f"{col}_tw_avg"]) / daily[f"{col}_tw_avg"]
+        avg_col = f"{col}_tw_avg"
+        pct_col = f"{col}_pct_vs_tw"
+        daily[avg_col] = trailing_mean(daily[col], trailing_window)
+        # guard against divide-by-zero so you don't see crazy values when avg ~ 0
+        daily[pct_col] = np.where(
+            daily[avg_col].abs() > 0,
+            (daily[col] - daily[avg_col]) / daily[avg_col],
+            np.nan,
+        )
 
 # % pMid hit by session (prev-bar midpoint within the session)
 def session_pmid_percent(scope: pd.DataFrame, label: str) -> pd.DataFrame:
@@ -493,8 +496,11 @@ daily = (
 for ses in ["ON","IB","RTH"]:
     col = f"{ses}_pMid_hit_pct"
     if col in daily.columns:
-        daily[f"{col}_tw_avg"] = trailing_mean(daily[col], trailing_window)
-        daily[f"{col}_pct_vs_tw"] = daily[col] - daily[f"{col}_tw_avg"]
+        avg_col = f"{col}_tw_avg"
+        pct_col = f"{col}_pct_vs_tw"
+        daily[avg_col] = trailing_mean(daily[col], trailing_window)
+        # For hit pct, pct_vs_tw is a difference (not ratio) so you see +/- absolute change
+        daily[pct_col] = daily[col] - daily[avg_col]
 
 # =========================
 # Assert latest trade_day presence
@@ -544,7 +550,8 @@ st.caption(
     "Session metrics come from **es_30m_enriched** and reset at 18:00 ET. "
     "Cumulative volume and session high/low are taken at the last bar in the current filter "
     "(full-day = last bar of the session; as-of snapshot = last bar before the cutoff). "
-    "Trailing averages exclude the current day."
+    "Trailing averages exclude the current day and are computed on the same filtered data "
+    "(full-day or as-of), so comparisons are apples-to-apples."
 )
 
 # =========================
