@@ -120,30 +120,58 @@ st.title("Market Conditions")
 
 c_day, c_week, c_month, c_year = st.columns(4)
 
-def _fmt_pct(x: float) -> str:
-    return "—" if pd.isna(x) else f"{x*100:,.1f}%"
-
-def _metric_display(ret: float):
+def _perf_tile(container, label: str, ret: float):
     """
-    Returns (value_str, delta_str) for st.metric.
-    Delta is what controls green/red arrows in Streamlit.
+    Render a single big colored percent tile:
+    - Green for positive
+    - Red for negative
+    - Gray for zero / NaN
     """
     if pd.isna(ret):
-        return "—", None
-    val = _fmt_pct(ret)
-    delta = f"{ret*100:+.1f}%"
-    return val, delta
+        display = "—"
+        color = "#9CA3AF"  # gray
+    else:
+        display = f"{ret*100:+.1f}%"
+        if ret > 0:
+            color = "#16a34a"  # green-600
+        elif ret < 0:
+            color = "#dc2626"  # red-600
+        else:
+            color = "#9CA3AF"  # gray
 
-day_val, day_delta   = _metric_display(day_ret)
-wtd_val, wtd_delta   = _metric_display(wtd_ret)
-mtd_val, mtd_delta   = _metric_display(mtd_ret)
-ytd_val, ytd_delta   = _metric_display(ytd_ret)
+    container.markdown(
+        f"""
+        <div style="
+            padding: 0.75rem 1rem;
+            border-radius: 0.75rem;
+            background-color: #111827;
+            border: 1px solid #374151;
+        ">
+          <div style="
+              font-size: 0.8rem;
+              color: #9CA3AF;
+              text-transform: uppercase;
+              letter-spacing: 0.05em;
+              margin-bottom: 0.25rem;
+          ">
+            {label}
+          </div>
+          <div style="
+              font-size: 1.6rem;
+              font-weight: 600;
+              color: {color};
+          ">
+            {display}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-c_day.metric("Day performance", day_val,   day_delta)
-c_week.metric("Week-to-date",    wtd_val,   wtd_delta)
-c_month.metric("Month-to-date", mtd_val,   mtd_delta)
-c_year.metric("Year-to-date",    ytd_val,   ytd_delta)
-
+_perf_tile(c_day,   "Day performance",   day_ret)
+_perf_tile(c_week,  "Week-to-date",      wtd_ret)
+_perf_tile(c_month, "Month-to-date",     mtd_ret)
+_perf_tile(c_year,  "Year-to-date",      ytd_ret)
 
 # =========================
 # Controls
