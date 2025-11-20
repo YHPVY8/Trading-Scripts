@@ -1,435 +1,739 @@
 #!/usr/bin/env python3
-import datetime as dt
-import pandas as pd
-import numpy as np
 import streamlit as st
-from supabase import create_client
-import streamlit.components.v1 as components
+import numpy as np
 
 st.set_page_config(page_title="Range Bar Test", layout="wide")
+st.title("Range Bar Testbed")
+
+st.caption(
+    "Use the controls below to adjust the prior RTH range, current session range, "
+    "and last price. The 10 examples show different ways to visualize the same idea."
+)
 
 # =========================
-# Supabase client
+# Inputs
 # =========================
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+c1, c2, c3, c4, c5 = st.columns(5)
+with c1:
+    prior_low = st.number_input("Prior RTH Low", value=6850.0, step=0.25)
+with c2:
+    prior_high = st.number_input("Prior RTH High", value=6900.0, step=0.25)
+with c3:
+    sess_low = st.number_input("Session Low", value=6880.0, step=0.25)
+with c4:
+    sess_high = st.number_input("Session High", value=6940.0, step=0.25)
+with c5:
+    last_price = st.number_input("Last Price", value=6935.0, step=0.25)
+
+# Guard so high >= low
+if prior_high < prior_low:
+    prior_high, prior_low = prior_low, prior_high
+if sess_high < sess_low:
+    sess_high, sess_low = sess_low, sess_high
+
+# =========================
+# Normalization helpers
+# =========================
+all_vals = [prior_low, prior_high, sess_low, sess_high, last_price]
+min_val = np.nanmin(all_vals)
+max_val = np.nanmax(all_vals)
+span = max(max_val - min_val, 1e-6)
+
+def pct_pos(value: float) -> float:
+    """Return percentage [0, 100] across the full extent of prior+session+last."""
+    return (value - min_val) / span * 100.0
+
+# Positions in %
+prior_start = pct_pos(prior_low)
+prior_end = pct_pos(prior_high)
+prior_width = max(1.0, prior_end - prior_start)
+
+sess_start = pct_pos(sess_low)
+sess_end = pct_pos(sess_high)
+sess_width = max(1.0, sess_end - sess_start)
+
+last_pct = pct_pos(last_price)
+
+# Also useful: relative position within prior range (for some examples)
+prior_span = max(prior_high - prior_low, 1e-6)
+last_within_prior = (last_price - prior_low) / prior_span  # can be <0 or >1
 
 
 # =========================
-# Helpers
+# Small helper to render example blocks
 # =========================
-def _load_latest_session_from_es_30m(max_rows: int = 2000):
-    """Load recent es_30m and compute latest trade_day (18:00 ET roll)."""
-    resp = (
-        sb.table("es_30m")
-          .select("*")
-          .order("time", desc=True)
-          .limit(max_rows)
-          .execute()
-    )
-    df = pd.DataFrame(resp.data)
-    if df.empty:
-        return None, None
-
-    df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
-    df["time_et"] = df["time"].dt.tz_convert("US/Eastern")
-
-    et = df["time_et"]
-    midnight = et.dt.floor("D")
-    roll = (et.dt.hour >= 18).astype("int64")
-    df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")
-    df["trade_date"] = df["trade_day"].dt.date
-
-    latest_td = df["trade_day"].max()
-    latest_session = df[df["trade_day"] == latest_td].copy().sort_values("time_et")
-    return latest_session, latest_td
-
-
-def _load_prior_rth_range(trade_date: dt.date):
+def block(container, title: str, subtitle: str, inner_html: str):
+    """Render a titled card with the given inner HTML."""
+    html = f"""
+    <div style="border:1px solid #D1D5DB;
+                border-radius:10px;
+                padding:8px 10px;
+                margin-bottom:12px;">
+        <div style="font-size:0.9rem;
+                    font-weight:600;
+                    color:#111827;
+                    margin-bottom:2px;">
+            {title}
+        </div>
+        <div style="font-size:0.78rem;
+                    color:#4B5563;
+                    margin-bottom:6px;">
+            {subtitle}
+        </div>
+        {inner_html}
+    </div>
     """
-    From es_trade_day_summary, load prior day's RTH Hi / Lo.
-    Columns in DB:
-      "RTH Hi", "RTH Lo"
-    """
-    try:
-        resp = (
-            sb.table("es_trade_day_summary")
-              .select('trade_date,"RTH Hi","RTH Lo"')
-              .lte("trade_date", trade_date.isoformat())
-              .order("trade_date", desc=True)
-              .limit(5)
-              .execute()
-        )
-        df = pd.DataFrame(resp.data)
-        if df.empty:
-            return np.nan, np.nan, None
-
-        df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
-        # Prior = latest strictly less than current trade_date, if available
-        prior_mask = df["trade_date"] < trade_date
-        if prior_mask.any():
-            prior_row = df.loc[prior_mask].sort_values("trade_date").iloc[-1]
-        else:
-            # fallback: use the last row as "prior"
-            prior_row = df.sort_values("trade_date").iloc[-1]
-
-        prior_date = prior_row["trade_date"]
-        rth_hi = prior_row['RTH Hi']
-        rth_lo = prior_row['RTH Lo']
-        return rth_hi, rth_lo, prior_date
-    except Exception as e:
-        st.warning(f"Could not load es_trade_day_summary: {e}")
-        return np.nan, np.nan, None
+    container.markdown(html, unsafe_allow_html=True)
 
 
-def _normalize_span(prior_hi, prior_lo, sess_hi, sess_lo, last_price):
-    """
-    Determine global min/max so we can map all levels to 0–100% width.
-    Returns (global_min, global_max).
-    """
-    vals = [v for v in [prior_hi, prior_lo, sess_hi, sess_lo, last_price] if pd.notna(v)]
-    if not vals:
-        return 0.0, 1.0
-    gmin = min(vals)
-    gmax = max(vals)
-    if gmax <= gmin:
-        gmax = gmin + 1.0
-    return gmin, gmax
-
-
-def _pct(x, gmin, gmax):
-    if pd.isna(x):
-        return None
-    return (x - gmin) / (gmax - gmin) * 100.0
-
+# Convenience label string used in all subtitles
+info_line = (
+    f"Prior RTH: {prior_low:.2f} – {prior_high:.2f} | "
+    f"Session: {sess_low:.2f} – {sess_high:.2f} | "
+    f"Last: {last_price:.2f}"
+)
 
 # =========================
-# Load data
+# Layout: 2 columns of examples
 # =========================
-st.title("Range Bar Test — Prior RTH vs Current Session")
+left_col, right_col = st.columns(2)
 
-session_df, latest_td = _load_latest_session_from_es_30m()
-if session_df is None or latest_td is None or session_df.empty:
-    st.error("No data from es_30m to test with.")
-    st.stop()
+# -------------------------------------------------
+# Example 1 – Hollow prior, filled session, last line
+# -------------------------------------------------
+inner1 = f"""
+<div style="position:relative; height:34px; background-color:#F9FAFB;
+            border-radius:999px; padding:0 2px;">
+    <!-- prior hollow range -->
+    <div style="position:absolute;
+                top:8px;
+                bottom:8px;
+                left:{prior_start:.1f}%;
+                width:{prior_width:.1f}%;
+                border-radius:999px;
+                border:2px solid #6B7280;
+                background-color:transparent;">
+    </div>
 
-trade_date = latest_td.date()
-sess_hi = session_df["high"].max()
-sess_lo = session_df["low"].min()
-last_price = session_df["close"].iloc[-1]
+    <!-- session filled range -->
+    <div style="position:absolute;
+                top:11px;
+                bottom:11px;
+                left:{sess_start:.1f}%;
+                width:{sess_width:.1f}%;
+                border-radius:999px;
+                background-color:#93C5FD;">
+    </div>
 
-prior_rth_hi, prior_rth_lo, prior_trade_date = _load_prior_rth_range(trade_date)
+    <!-- last price marker -->
+    <div style="position:absolute;
+                top:5px;
+                bottom:5px;
+                left:{last_pct:.1f}%;
+                width:2px;
+                background-color:#111827;">
+    </div>
+</div>
+<div style="margin-top:4px;
+            display:flex;
+            justify-content:space-between;
+            font-size:0.75rem;
+            color:#6B7280;">
+    <span>Full extent min: {min_val:.2f}</span>
+    <span>Full extent max: {max_val:.2f}</span>
+</div>
+"""
+block(
+    left_col,
+    "Example 1 – Hollow prior, filled session, last marker",
+    info_line,
+    inner1,
+)
 
-col_info, col_main = st.columns([1, 2])
+# -------------------------------------------------
+# Example 2 – Prior as band, session as darker band, last dot
+# -------------------------------------------------
+inner2 = f"""
+<div style="position:relative; height:34px;
+            border-radius:999px;
+            background:linear-gradient(90deg,#F3F4F6,#E5E7EB);">
+    <!-- prior band -->
+    <div style="position:absolute;
+                top:9px;
+                bottom:9px;
+                left:{prior_start:.1f}%;
+                width:{prior_width:.1f}%;
+                border-radius:999px;
+                background-color:#E5E7EB;">
+    </div>
 
-with col_info:
-    st.markdown("**Data used for test**")
-    st.write(
-        {
-            "current_trade_date": str(trade_date),
-            "prior_trade_date": str(prior_trade_date),
-            "prior_RTH_Hi": float(prior_rth_hi) if pd.notna(prior_rth_hi) else None,
-            "prior_RTH_Lo": float(prior_rth_lo) if pd.notna(prior_rth_lo) else None,
-            "current_session_Hi": float(sess_hi) if pd.notna(sess_hi) else None,
-            "current_session_Lo": float(sess_lo) if pd.notna(sess_lo) else None,
-            "last_price": float(last_price) if pd.notna(last_price) else None,
-        }
-    )
+    <!-- session darker band -->
+    <div style="position:absolute;
+                top:11px;
+                bottom:11px;
+                left:{sess_start:.1f}%;
+                width:{sess_width:.1f}%;
+                border-radius:999px;
+                background-color:#60A5FA;">
+    </div>
 
-with col_main:
-    st.markdown(
-        "These are different **horizontal range visuals** showing how the **current session** "
-        "relates to the **prior RTH range**."
-    )
+    <!-- last as a small circle -->
+    <div style="position:absolute;
+                top:8px;
+                left:calc({last_pct:.1f}% - 6px);
+                width:12px;
+                height:12px;
+                border-radius:999px;
+                border:2px solid #111827;
+                background-color:#FFFFFF;">
+    </div>
+</div>
+<div style="margin-top:4px;
+            font-size:0.75rem;
+            color:#6B7280;
+            text-align:center;">
+    Prior band (light) vs Session band (blue) with Last as dot
+</div>
+"""
+block(
+    right_col,
+    "Example 2 – Overlapping bands with last as dot",
+    info_line,
+    inner2,
+)
 
-gmin, gmax = _normalize_span(prior_rth_hi, prior_rth_lo, sess_hi, sess_lo, last_price)
+# -------------------------------------------------
+# Example 3 – Horizontal “candlestick” for session, prior as frame
+# -------------------------------------------------
+# Here we treat session as a horizontal candle: thin wick from low–high, thicker body
+session_mid = (sess_low + sess_high) / 2.0
+mid_pct = pct_pos(session_mid)
 
-p_lo_pct = _pct(prior_rth_lo, gmin, gmax)
-p_hi_pct = _pct(prior_rth_hi, gmin, gmax)
-s_lo_pct = _pct(sess_lo, gmin, gmax)
-s_hi_pct = _pct(sess_hi, gmin, gmax)
-last_pct = _pct(last_price, gmin, gmax)
+inner3 = f"""
+<div style="position:relative; height:40px; background-color:#F9FAFB;
+            border-radius:8px;">
 
+    <!-- prior frame -->
+    <div style="position:absolute;
+                top:12px;
+                bottom:12px;
+                left:{prior_start:.1f}%;
+                width:{prior_width:.1f}%;
+                border-radius:4px;
+                border:2px dashed #9CA3AF;
+                background-color:transparent;">
+    </div>
 
-# =========================
-# Variant 1: Overlay box (prior hollow + current fill + last marker)
-# =========================
-st.subheader("Variant 1 — Overlay Box (prior hollow, current filled, last marker)")
+    <!-- session 'wick' -->
+    <div style="position:absolute;
+                top:18px;
+                bottom:18px;
+                left:{sess_start:.1f}%;
+                width:{sess_width:.1f}%;
+                background-color:#4B5563;">
+    </div>
 
-if any(pd.isna(v) for v in [prior_rth_hi, prior_rth_lo, sess_hi, sess_lo, last_price]):
-    st.info("Missing values — cannot render this variant.")
-else:
-    html_v1 = f"""
-    <div style="font-size:0.85rem; margin-bottom:6px;">
-      Prior RTH: {prior_rth_lo:.2f} – {prior_rth_hi:.2f} &nbsp; | &nbsp;
-      Current: {sess_lo:.2f} – {sess_hi:.2f} &nbsp; | &nbsp;
+    <!-- session 'body' around mid -->
+    <div style="position:absolute;
+                top:14px;
+                bottom:14px;
+                left:{min(mid_pct-3, sess_end):.1f}%;
+                width:6%;
+                border-radius:4px;
+                background-color:#60A5FA;">
+    </div>
+
+    <!-- last marker -->
+    <div style="position:absolute;
+                top:10px;
+                bottom:10px;
+                left:{last_pct:.1f}%;
+                width:2px;
+                background-color:#111827;">
+    </div>
+</div>
+<div style="margin-top:4px;
+            font-size:0.75rem;
+            color:#6B7280;
+            text-align:center;">
+    Prior as dashed frame, Session as horizontal candle, Last as line
+</div>
+"""
+block(
+    left_col,
+    "Example 3 – Horizontal candlestick style",
+    info_line,
+    inner3,
+)
+
+# -------------------------------------------------
+# Example 4 – Inside / outside prior range zones
+# -------------------------------------------------
+# We color the bar segments: below prior low, inside, above prior high.
+full_width = 100.0
+below_width = max(0.0, prior_start)
+inside_width = max(0.0, prior_end - prior_start)
+above_width = max(0.0, full_width - prior_end)
+
+inner4 = f"""
+<div style="position:relative; height:30px; border-radius:999px; overflow:hidden;
+            border:1px solid #D1D5DB;">
+
+    <!-- below prior low -->
+    <div style="position:absolute;
+                top:0;
+                bottom:0;
+                left:0%;
+                width:{below_width:.1f}%;
+                background-color:#FEE2E2;">
+    </div>
+
+    <!-- inside prior -->
+    <div style="position:absolute;
+                top:0;
+                bottom:0;
+                left:{prior_start:.1f}%;
+                width:{inside_width:.1f}%;
+                background-color:#E5E7EB;">
+    </div>
+
+    <!-- above prior high -->
+    <div style="position:absolute;
+                top:0;
+                bottom:0;
+                left:{prior_end:.1f}%;
+                width:{above_width:.1f}%;
+                background-color:#DBEAFE;">
+    </div>
+
+    <!-- session range -->
+    <div style="position:absolute;
+                top:8px;
+                bottom:8px;
+                left:{sess_start:.1f}%;
+                width:{sess_width:.1f}%;
+                border-radius:999px;
+                background-color:#60A5FA;">
+    </div>
+
+    <!-- last marker -->
+    <div style="position:absolute;
+                top:4px;
+                bottom:4px;
+                left:{last_pct:.1f}%;
+                width:2px;
+                background-color:#111827;">
+    </div>
+</div>
+<div style="margin-top:4px;
+            display:flex;
+            justify-content:space-between;
+            font-size:0.75rem;
+            color:#6B7280;">
+    <span>Below prior low</span>
+    <span>Inside prior</span>
+    <span>Above prior high</span>
+</div>
+"""
+block(
+    right_col,
+    "Example 4 – Zoned bar (below / inside / above)",
+    info_line,
+    inner4,
+)
+
+# -------------------------------------------------
+# Example 5 – Double row: prior on top, session on bottom
+# -------------------------------------------------
+inner5 = f"""
+<div style="display:flex; flex-direction:column; gap:4px;">
+
+  <!-- prior row -->
+  <div style="position:relative; height:18px;">
+    <div style="position:absolute;
+                top:4px;
+                bottom:4px;
+                left:{prior_start:.1f}%;
+                width:{prior_width:.1f}%;
+                border-radius:999px;
+                background-color:#D1D5DB;">
+    </div>
+    <div style="position:absolute;
+                top:0;
+                left:{prior_start:.1f}%;
+                font-size:0.7rem;
+                color:#4B5563;">
+        {prior_low:.2f}
+    </div>
+    <div style="position:absolute;
+                top:0;
+                right:{100-prior_end:.1f}%;
+                font-size:0.7rem;
+                color:#4B5563;">
+        {prior_high:.2f}
+    </div>
+  </div>
+
+  <!-- session row -->
+  <div style="position:relative; height:18px;">
+    <div style="position:absolute;
+                top:4px;
+                bottom:4px;
+                left:{sess_start:.1f}%;
+                width:{sess_width:.1f}%;
+                border-radius:999px;
+                background-color:#93C5FD;">
+    </div>
+    <div style="position:absolute;
+                top:0;
+                left:{sess_start:.1f}%;
+                font-size:0.7rem;
+                color:#1F2937;">
+        {sess_low:.2f}
+    </div>
+    <div style="position:absolute;
+                top:0;
+                right:{100-sess_end:.1f}%;
+                font-size:0.7rem;
+                color:#1F2937;">
+        {sess_high:.2f}
+    </div>
+
+    <!-- last marker -->
+    <div style="position:absolute;
+                top:2px;
+                bottom:2px;
+                left:{last_pct:.1f}%;
+                width:2px;
+                background-color:#111827;">
+    </div>
+  </div>
+
+</div>
+"""
+block(
+    left_col,
+    "Example 5 – Double row (prior vs session)",
+    info_line,
+    inner5,
+)
+
+# -------------------------------------------------
+# Example 6 – Prior as hollow pill, session as outline only, last as big marker
+# -------------------------------------------------
+inner6 = f"""
+<div style="position:relative; height:34px; background-color:#FFFFFF;">
+    <!-- full extent faint -->
+    <div style="position:absolute;
+                top:13px;
+                bottom:13px;
+                left:0%;
+                width:100%;
+                border-radius:999px;
+                background-color:#F3F4F6;">
+    </div>
+
+    <!-- prior hollow pill -->
+    <div style="position:absolute;
+                top:10px;
+                bottom:10px;
+                left:{prior_start:.1f}%;
+                width:{prior_width:.1f}%;
+                border-radius:999px;
+                border:2px solid #9CA3AF;
+                background-color:transparent;">
+    </div>
+
+    <!-- session outline -->
+    <div style="position:absolute;
+                top:14px;
+                bottom:14px;
+                left:{sess_start:.1f}%;
+                width:{sess_width:.1f}%;
+                border-radius:999px;
+                border:2px solid #60A5FA;
+                background-color:transparent;">
+    </div>
+
+    <!-- last price marker (larger circle) -->
+    <div style="position:absolute;
+                top:8px;
+                left:calc({last_pct:.1f}% - 7px);
+                width:14px;
+                height:14px;
+                border-radius:999px;
+                border:2px solid #111827;
+                background-color:#FFFFFF;">
+    </div>
+</div>
+<div style="margin-top:4px;
+            font-size:0.75rem;
+            color:#6B7280;
+            text-align:center;">
+    Hollow prior & session outlines, last as bold circle
+</div>
+"""
+block(
+    right_col,
+    "Example 6 – Outlined prior and session",
+    info_line,
+    inner6,
+)
+
+# -------------------------------------------------
+# Example 7 – “Thermometer” style inside prior range
+# -------------------------------------------------
+# Here we show last position *within prior only*; outside prior clamps at ends.
+last_pct_prior = (last_price - prior_low) / prior_span * 100.0
+last_pct_prior = max(0.0, min(100.0, last_pct_prior))
+
+inner7 = f"""
+<div style="position:relative; height:40px;">
+
+  <!-- prior 'thermometer' tube -->
+  <div style="position:absolute;
+              top:6px;
+              bottom:6px;
+              left:{prior_start:.1f}%;
+              width:{prior_width:.1f}%;
+              border-radius:999px;
+              background-color:#E5E7EB;">
+  </div>
+
+  <!-- fill from low to last (within prior) -->
+  <div style="position:absolute;
+              top:9px;
+              bottom:9px;
+              left:{prior_start:.1f}%;
+              width:{last_pct_prior:.1f}%;
+              border-radius:999px;
+              background:linear-gradient(90deg,#6EE7B7,#22C55E);">
+  </div>
+
+  <!-- labels at prior extremes -->
+  <div style="position:absolute;
+              top:0;
+              left:{prior_start:.1f}%;
+              font-size:0.7rem;
+              color:#4B5563;">
+      {prior_low:.2f}
+  </div>
+  <div style="position:absolute;
+              top:0;
+              left:calc({prior_end:.1f}% - 3rem);
+              font-size:0.7rem;
+              color:#4B5563;">
+      {prior_high:.2f}
+  </div>
+
+  <!-- last label -->
+  <div style="position:absolute;
+              bottom:0;
+              left:calc({prior_start + last_pct_prior * prior_width / 100.0:.1f}% - 2rem);
+              font-size:0.7rem;
+              color:#111827;">
       Last: {last_price:.2f}
+  </div>
+
+</div>
+"""
+block(
+    left_col,
+    "Example 7 – Thermometer within prior range",
+    info_line,
+    inner7,
+)
+
+# -------------------------------------------------
+# Example 8 – Split bar: left = prior, right = session
+# -------------------------------------------------
+inner8 = f"""
+<div style="display:flex; flex-direction:column; gap:6px;">
+
+  <div style="font-size:0.75rem; color:#4B5563;">Prior RTH range</div>
+  <div style="position:relative; height:20px; background-color:#F9FAFB; border-radius:999px;">
+    <div style="position:absolute;
+                top:5px;
+                bottom:5px;
+                left:{prior_start:.1f}%;
+                width:{prior_width:.1f}%;
+                border-radius:999px;
+                background-color:#D1D5DB;">
     </div>
-    <div style="position:relative; height:90px; padding:14px 4px 10px 4px;">
-      <!-- base track -->
-      <div style="position:absolute; left:0; right:0; top:40px; height:8px;
-                  background-color:#E5E7EB; border-radius:999px;">
-      </div>
+  </div>
 
-      <!-- prior RTH hollow box -->
-      <div style="position:absolute;
-                  top:36px;
-                  left:{p_lo_pct:.2f}%;
-                  width:{(p_hi_pct - p_lo_pct):.2f}%;
-                  height:16px;
-                  border:2px solid #6B7280;
-                  border-radius:8px;
-                  background-color:rgba(255,255,255,0.9);">
-      </div>
-
-      <!-- current session solid box (overlay) -->
-      <div style="position:absolute;
-                  top:38px;
-                  left:{s_lo_pct:.2f}%;
-                  width:{(s_hi_pct - s_lo_pct):.2f}%;
-                  height:12px;
-                  border-radius:6px;
-                  background-color:rgba(59,130,246,0.55);">
-      </div>
-
-      <!-- LAST price marker -->
-      <div style="position:absolute;
-                  left:{last_pct:.2f}%;
-                  top:28px;
-                  width:2px;
-                  height:30px;
-                  background-color:#111827;">
-      </div>
-      <div style="position:absolute;
-                  left:{last_pct:.2f}%;
-                  top:20px;
-                  transform:translateX(-50%);
-                  font-size:0.75rem;
-                  background-color:#F9FAFB;
-                  padding:2px 4px;
-                  border-radius:4px;
-                  border:1px solid #D1D5DB;">
-        Last {last_price:.2f}
-      </div>
-
-      <!-- prior RTH labels above -->
-      <div style="position:absolute;
-                  left:{p_lo_pct:.2f}%;
-                  top:6px;
-                  transform:translateX(-50%);
-                  font-size:0.7rem;
-                  color:#DC2626;">
-        RTH Lo<br>{prior_rth_lo:.2f}
-      </div>
-      <div style="position:absolute;
-                  left:{p_hi_pct:.2f}%;
-                  top:6px;
-                  transform:translateX(-50%);
-                  font-size:0.7rem;
-                  color:#16A34A;">
-        RTH Hi<br>{prior_rth_hi:.2f}
-      </div>
-
-      <!-- current session labels below -->
-      <div style="position:absolute;
-                  left:{s_lo_pct:.2f}%;
-                  bottom:0px;
-                  transform:translateX(-50%);
-                  font-size:0.7rem;
-                  color:#DC2626;">
-        Sess Lo<br>{sess_lo:.2f}
-      </div>
-      <div style="position:absolute;
-                  left:{s_hi_pct:.2f}%;
-                  bottom:0px;
-                  transform:translateX(-50%);
-                  font-size:0.7rem;
-                  color:#16A34A;">
-        Sess Hi<br>{sess_hi:.2f}
-      </div>
+  <div style="font-size:0.75rem; color:#4B5563;">Current session range (+ Last)</div>
+  <div style="position:relative; height:20px; background-color:#F9FAFB; border-radius:999px;">
+    <div style="position:absolute;
+                top:5px;
+                bottom:5px;
+                left:{sess_start:.1f}%;
+                width:{sess_width:.1f}%;
+                border-radius:999px;
+                background-color:#93C5FD;">
     </div>
-    """
-    components.html(html_v1, height=130)
-
-
-# =========================
-# Variant 2: Zone bar (below / inside / above + last bubble)
-# =========================
-st.subheader("Variant 2 — Zone Bar (below / inside / above prior range)")
-
-if any(pd.isna(v) for v in [prior_rth_hi, prior_rth_lo, last_price]):
-    st.info("Missing values — cannot render this variant.")
-else:
-    html_v2 = f"""
-    <div style="font-size:0.85rem; margin-bottom:6px;">
-      Zone: red = below prior low, gray = inside prior RTH, green = above prior high.
-      Last marked as a bubble.
+    <div style="position:absolute;
+                top:2px;
+                bottom:2px;
+                left:{last_pct:.1f}%;
+                width:2px;
+                background-color:#111827;">
     </div>
-    <div style="position:relative; height:70px; padding:10px 4px 6px 4px;">
-      <div style="position:absolute; left:0; right:0; top:26px; height:12px; border-radius:999px; overflow:hidden;">
-        <!-- left/red (below low) -->
-        <div style="position:absolute; left:0; width:{p_lo_pct:.2f}%; height:100%; background-color:#FCA5A5;"></div>
-        <!-- mid/gray (inside prior range) -->
-        <div style="position:absolute; left:{p_lo_pct:.2f}%; width:{(p_hi_pct - p_lo_pct):.2f}%; height:100%; background-color:#E5E7EB;"></div>
-        <!-- right/green (above high) -->
-        <div style="position:absolute; left:{p_hi_pct:.2f}%; width:{(100.0 - p_hi_pct):.2f}%; height:100%; background-color:#BBF7D0;"></div>
-      </div>
+  </div>
 
-      <!-- last bubble -->
-      <div style="position:absolute;
-                  top:20px;
-                  left:{last_pct:.2f}%;
-                  transform:translateX(-50%);
-                  width:18px;
-                  height:18px;
-                  border-radius:999px;
-                  background-color:#111827;">
-      </div>
-      <div style="position:absolute;
-                  top:6px;
-                  left:{last_pct:.2f}%;
-                  transform:translateX(-50%);
-                  font-size:0.75rem;">
-        {last_price:.1f}
-      </div>
-    </div>
-    """
-    components.html(html_v2, height=90)
+</div>
+"""
+block(
+    right_col,
+    "Example 8 – Split prior vs session rows",
+    info_line,
+    inner8,
+)
 
+# -------------------------------------------------
+# Example 9 – Prior rectangle with current “extension tails”
+# -------------------------------------------------
+# Show how far session extends beyond prior (if at all).
+below_ext = max(0.0, prior_start - sess_start)
+above_ext = max(0.0, sess_end - prior_end)
 
-# =========================
-# Variant 3: Double track (prior vs current as two thin lines)
-# =========================
-st.subheader("Variant 3 — Double Track (top = prior RTH, bottom = current session)")
+inner9 = f"""
+<div style="position:relative; height:34px; background-color:#FFFFFF;">
 
-if any(pd.isna(v) for v in [prior_rth_hi, prior_rth_lo, sess_hi, sess_lo]):
-    st.info("Missing values — cannot render this variant.")
-else:
-    html_v3 = f"""
-    <div style="font-size:0.85rem; margin-bottom:6px;">
-      Top track: prior RTH. Bottom track: current session. Last price marker on bottom.
-    </div>
-    <div style="position:relative; height:80px; padding:8px 4px 10px 4px;">
-      <!-- prior track -->
-      <div style="position:absolute; left:0; right:0; top:26px; height:3px; background-color:#E5E7EB;"></div>
-      <div style="position:absolute;
-                  top:24px;
-                  left:{p_lo_pct:.2f}%;
-                  width:{(p_hi_pct - p_lo_pct):.2f}%;
-                  height:7px;
-                  background-color:#6B7280;">
-      </div>
+  <!-- prior hollow rectangle -->
+  <div style="position:absolute;
+              top:10px;
+              bottom:10px;
+              left:{prior_start:.1f}%;
+              width:{prior_width:.1f}%;
+              border-radius:4px;
+              border:2px solid #9CA3AF;
+              background-color:transparent;">
+  </div>
 
-      <!-- current track -->
-      <div style="position:absolute; left:0; right:0; top:50px; height:3px; background-color:#E5E7EB;"></div>
-      <div style="position:absolute;
-                  top:48px;
-                  left:{s_lo_pct:.2f}%;
-                  width:{(s_hi_pct - s_lo_pct):.2f}%;
-                  height:7px;
-                  background-color:#3B82F6;">
-      </div>
+  <!-- extension below prior low (if any) -->
+  <div style="position:absolute;
+              top:13px;
+              bottom:13px;
+              left:{max(0.0, sess_start):.1f}%;
+              width:{below_ext:.1f}%;
+              border-radius:999px;
+              background-color:#F97316;">
+  </div>
 
-      <!-- last marker on bottom -->
-      <div style="position:absolute;
-                  left:{last_pct:.2f}%;
-                  top:42px;
-                  width:2px;
-                  height:20px;
-                  background-color:#111827;">
-      </div>
-    </div>
-    """
-    components.html(html_v3, height=100)
+  <!-- extension above prior high (if any) -->
+  <div style="position:absolute;
+              top:13px;
+              bottom:13px;
+              left:{prior_end:.1f}%;
+              width:{above_ext:.1f}%;
+              border-radius:999px;
+              background-color:#22C55E;">
+  </div>
 
+  <!-- last marker -->
+  <div style="position:absolute;
+              top:6px;
+              bottom:6px;
+              left:{last_pct:.1f}%;
+              width:2px;
+              background-color:#111827;">
+  </div>
 
-# =========================
-# Variant 4: Horizontal "candlestick" for current session,
-# with ghosted prior range in background
-# =========================
-st.subheader("Variant 4 — Horizontal Candlestick for Current Session (with prior ghost)")
+</div>
+<div style="margin-top:4px;
+            font-size:0.75rem;
+            color:#6B7280;
+            text-align:center;">
+    Orange = extension below prior low, Green = extension above prior high
+</div>
+"""
+block(
+    left_col,
+    "Example 9 – Prior box with extension tails",
+    info_line,
+    inner9,
+)
 
-if any(pd.isna(v) for v in [prior_rth_hi, prior_rth_lo, sess_hi, sess_lo, last_price]):
-    st.info("Missing values — cannot render this variant.")
-else:
-    html_v4 = f"""
-    <div style="font-size:0.85rem; margin-bottom:6px;">
-      Gray ghost = prior RTH. Blue bar = current session range. Black tick = last.
-    </div>
-    <div style="position:relative; height:70px; padding:10px 4px;">
-      <!-- prior ghost band -->
-      <div style="position:absolute;
-                  top:28px;
-                  left:{p_lo_pct:.2f}%;
-                  width:{(p_hi_pct - p_lo_pct):.2f}%;
-                  height:10px;
-                  border-radius:5px;
-                  background-color:rgba(148,163,184,0.4);">
-      </div>
+# -------------------------------------------------
+# Example 10 – Mini horizontal “OHLC” bar for session vs prior
+# -------------------------------------------------
+# Treat prior as faint and session as bold OHLC-ish bar.
+inner10 = f"""
+<div style="position:relative; height:36px; background-color:#F9FAFB; border-radius:8px;">
 
-      <!-- current horizontal 'candle' -->
-      <div style="position:absolute;
-                  top:30px;
-                  left:{s_lo_pct:.2f}%;
-                  width:{(s_hi_pct - s_lo_pct):.2f}%;
-                  height:6px;
-                  border-radius:3px;
-                  background-color:#3B82F6;">
-      </div>
+  <!-- prior faint bar -->
+  <div style="position:absolute;
+              top:20px;
+              bottom:20px;
+              left:{prior_start:.1f}%;
+              width:{prior_width:.1f}%;
+              background-color:#E5E7EB;">
+  </div>
 
-      <!-- last 'tick' -->
-      <div style="position:absolute;
-                  top:24px;
-                  left:{last_pct:.2f}%;
-                  width:2px;
-                  height:18px;
-                  background-color:#111827;">
-      </div>
-    </div>
-    """
-    components.html(html_v4, height=90)
+  <!-- prior extremes labels -->
+  <div style="position:absolute;
+              top:0;
+              left:{prior_start:.1f}%;
+              font-size:0.7rem;
+              color:#4B5563;">
+      pLow {prior_low:.1f}
+  </div>
+  <div style="position:absolute;
+              top:0;
+              left:calc({prior_end:.1f}% - 3rem);
+              font-size:0.7rem;
+              color:#4B5563;">
+      pHigh {prior_high:.1f}
+  </div>
 
+  <!-- session main bar (like OHLC) -->
+  <div style="position:absolute;
+              top:16px;
+              bottom:16px;
+              left:{sess_start:.1f}%;
+              width:{sess_width:.1f}%;
+              background-color:#60A5FA;">
+  </div>
 
-# =========================
-# Variant 5: Minimal labels only (no fancy bar, just aligned markers)
-# =========================
-st.subheader("Variant 5 — Minimal (labels aligned on a simple line)")
+  <!-- session low tick -->
+  <div style="position:absolute;
+              top:14px;
+              left:{sess_start:.1f}%;
+              width:6px;
+              height:2px;
+              background-color:#111827;">
+  </div>
 
-if any(pd.isna(v) for v in [prior_rth_hi, prior_rth_lo, sess_hi, sess_lo, last_price]):
-    st.info("Missing values — cannot render this variant.")
-else:
-    html_v5 = f"""
-    <div style="position:relative; height:80px; padding:12px 4px;">
-      <div style="position:absolute; left:0; right:0; top:40px; height:1px; background-color:#D1D5DB;"></div>
+  <!-- session high tick -->
+  <div style="position:absolute;
+              top:14px;
+              left:calc({sess_end:.1f}% - 6px);
+              width:6px;
+              height:2px;
+              background-color:#111827;">
+  </div>
 
-      <!-- prior low / high -->
-      <div style="position:absolute; top:22px; left:{p_lo_pct:.2f}%; transform:translateX(-50%);
-                  font-size:0.75rem; color:#DC2626;">
-        pLo {prior_rth_lo:.1f}
-      </div>
-      <div style="position:absolute; top:22px; left:{p_hi_pct:.2f}%; transform:translateX(-50%);
-                  font-size:0.75rem; color:#16A34A;">
-        pHi {prior_rth_hi:.1f}
-      </div>
+  <!-- last marker tick -->
+  <div style="position:absolute;
+              top:24px;
+              left:{last_pct:.1f}%;
+              width:2px;
+              height:8px;
+              background-color:#111827;">
+  </div>
 
-      <!-- session low / high -->
-      <div style="position:absolute; top:46px; left:{s_lo_pct:.2f}%; transform:translateX(-50%);
-                  font-size:0.75rem; color:#DC2626;">
-        Lo {sess_lo:.1f}
-      </div>
-      <div style="position:absolute; top:46px; left:{s_hi_pct:.2f}%; transform:translateX(-50%);
-                  font-size:0.75rem; color:#16A34A;">
-        Hi {sess_hi:.1f}
-      </div>
-
-      <!-- last -->
-      <div style="position:absolute; top:32px; left:{last_pct:.2f}%;
-                  width:2px; height:16px; background-color:#111827;"></div>
-      <div style="position:absolute; top:60px; left:{last_pct:.2f}%; transform:translateX(-50%);
-                  font-size:0.75rem;">
-        Last {last_price:.1f}
-      </div>
-    </div>
-    """
-    components.html(html_v5, height=100)
+</div>
+<div style="margin-top:4px;
+            font-size:0.75rem;
+            color:#6B7280;
+            text-align:center;">
+    Prior = faint band, Session = bold bar with low/high ticks, Last = vertical tick
+</div>
+"""
+block(
+    right_col,
+    "Example 10 – Mini horizontal OHLC style",
+    info_line,
+    inner10,
+)
