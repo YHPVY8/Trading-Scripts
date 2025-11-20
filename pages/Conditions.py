@@ -248,7 +248,6 @@ df = df.sort_values(["trade_day", "time_et"]).reset_index(drop=True)
 
 # =========================
 # Backfill: ensure the latest trade_day has ALL bars from 18:00 ET
-# (prevents wrong lows/highs/cum-vol when DESC limit clipped early ON bars)
 # =========================
 latest_td = df["trade_day"].max()
 latest_day_df = df[df["trade_day"] == latest_td]
@@ -285,7 +284,7 @@ if not latest_day_df.empty:
             # add the flags we use later
             tt = missing_df["time_et"].dt.time
             missing_df["ON"]  = ((tt >= dt.time(18,0)) | (tt < dt.time(9,30)))
-            missing_df["IB"]  = ((tt >= dt.time(9,30)) & (tt < dt.time(10,30)))
+            missing_df["IB"]  = ((tt >= dt.time(9,30)) & (t < dt.time(10,30)))
             missing_df["RTH"] = ((tt >= dt.time(9,30)) & (tt <= dt.time(16,0)))
 
             # keep only rows that aren't already present
@@ -296,8 +295,6 @@ if not latest_day_df.empty:
 
 # =========================
 # Optional: As-of cutoff filtering (trade_day aware)
-# Keeps bars: (trade_day-1 @ 18:00) → (trade_day @ HH:MM) for EVERY trade_day
-# So prior days are also truncated at the same intraday cutoff -> apples-to-apples.
 # =========================
 if mode == "As-of time snapshot":
     cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
@@ -473,13 +470,12 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
 
 daily = agg_daily(df)
 
-# Trailing comparisons (apples-to-apples because scope already respects Full/As-of mode)
+# Trailing comparisons
 for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
     if col in daily.columns:
         avg_col = f"{col}_tw_avg"
         pct_col = f"{col}_pct_vs_tw"
         daily[avg_col] = trailing_mean(daily[col], trailing_window)
-        # guard against divide-by-zero so you don't see crazy values when avg ~ 0
         daily[pct_col] = np.where(
             daily[avg_col].abs() > 0,
             (daily[col] - daily[avg_col]) / daily[avg_col],
@@ -520,7 +516,6 @@ for ses in ["ON","IB","RTH"]:
         avg_col = f"{col}_tw_avg"
         pct_col = f"{col}_pct_vs_tw"
         daily[avg_col] = trailing_mean(daily[col], trailing_window)
-        # For hit pct, pct_vs_tw is a difference (not ratio) so you see +/- absolute change
         daily[pct_col] = daily[col] - daily[avg_col]
 
 # =========================
@@ -576,48 +571,38 @@ st.caption(
 )
 
 # ======================================================
-# Range vs prior RTH (Option A) + Moving averages (B, E)
+# Range vs prior RTH (Option A) + Moving averages (cards)
 # ======================================================
 st.markdown("### Intraday Context: Prior RTH Range & Moving Averages")
 
-col_range, col_ma_cards, col_ma_ladder = st.columns([2, 2, 2])
+col_range, col_ma_cards = st.columns([2, 2])
 
 # ----- helper: range position bar (Option A) -----
-def _render_range_position_bar(container, current_price, rth_low, rth_high,
-                               session_low, session_high):
-    """
-    Horizontal 'thermometer' bar:
-    - Grey bar over an extended domain (so you can see extensions beyond prior RTH).
-    - Prior RTH low/high labels above.
-    - Session low / last / high markers + labels below.
-    """
-    if any(pd.isna(x) for x in [current_price, rth_low, rth_high, session_low, session_high]):
-        container.info("Not enough data for prior RTH range bar.")
+def _render_range_position_bar(container, last_price, sess_low, sess_high,
+                               rth_low, rth_high):
+    # Require valid numbers
+    if any(pd.isna(x) for x in [last_price, sess_low, sess_high, rth_low, rth_high]):
+        container.info("Range context not available (missing price / RTH data).")
+        return
+    # Define domain that can extend outside pRTH range if session extends
+    domain_low = min(rth_low, sess_low, last_price)
+    domain_high = max(rth_high, sess_high, last_price)
+    if domain_high <= domain_low:
+        container.info("Invalid range data for range bar.")
         return
 
-    # Build extended domain to show moves beyond prior range
-    base_low = min(rth_low, session_low, current_price)
-    base_high = max(rth_high, session_high, current_price)
-    span = base_high - base_low
-    if span <= 0:
-        container.info("Invalid range to display.")
-        return
+    span = domain_high - domain_low
 
-    # Add small padding
-    pad = span * 0.05
-    domain_low = base_low - pad
-    domain_high = base_high + pad
-    domain_span = domain_high - domain_low
+    def pct(x: float) -> float:
+        return 100.0 * (x - domain_low) / span
 
-    def _pos(val: float) -> float:
-        return (val - domain_low) / domain_span * 100.0
+    rth_low_pct = pct(rth_low)
+    rth_hi_pct  = pct(rth_high)
+    sess_low_pct = pct(sess_low)
+    sess_hi_pct  = pct(sess_high)
+    last_pct     = pct(last_price)
 
-    pos_rth_low = _pos(rth_low)
-    pos_rth_high = _pos(rth_high)
-    pos_sess_low = _pos(session_low)
-    pos_sess_high = _pos(session_high)
-    pos_last = _pos(current_price)
-
+    # HTML – all inline, no comments, to avoid Streamlit escaping
     html = f"""
         <div style="font-size:0.9rem; margin-bottom:4px;">
             Current vs prior RTH range
@@ -625,56 +610,37 @@ def _render_range_position_bar(container, current_price, rth_low, rth_high,
 
         <div style="display:flex; justify-content:space-between;
                     font-size:0.8rem; color:#4B5563; margin-bottom:4px;">
-            <span>Prev RTH Low: {rth_low:.2f}</span>
-            <span>Prev RTH High: {rth_high:.2f}</span>
+            <span>pRTH Low: {rth_low:.2f}</span>
+            <span>Last: {last_price:.2f}</span>
+            <span>pRTH High: {rth_high:.2f}</span>
         </div>
 
-        <div style="position:relative;
-                    height:26px;
-                    border-radius:999px;
-                    background-color:#E5E7EB;
-                    overflow:visible;
-                    margin-bottom:4px;">
-            <!-- full domain bar -->
+        <div style="position:relative; height:34px; border-radius:999px;
+                    background-color:#E5E7EB; overflow:hidden; margin-bottom:4px;">
 
-            <!-- marker for LAST price -->
+            <div style="position:absolute; top:10px; bottom:10px;
+                        left:{rth_low_pct:.1f}%; width:{(rth_hi_pct - rth_low_pct):.1f}%;
+                        background-color:#CBD5F5;"></div>
+
             <div title="Last"
-                 style="position:absolute;
-                        top:2px;
-                        bottom:2px;
-                        left:{pos_last:.1f}%;
-                        width:2px;
-                        background-color:#111827;">
-            </div>
+                 style="position:absolute; top:4px; bottom:4px;
+                        left:{last_pct:.1f}%; width:2px; background-color:#111827;"></div>
 
-            <!-- marker for Session Low -->
             <div title="Session Low"
-                 style="position:absolute;
-                        top:0;
-                        bottom:0;
-                        left:{pos_sess_low:.1f}%;
-                        width:2px;
-                        background-color:#DC2626;
-                        opacity:0.9;">
-            </div>
+                 style="position:absolute; top:0; bottom:0;
+                        left:{sess_low_pct:.1f}%; width:2px;
+                        background-color:#DC2626; opacity:0.9;"></div>
 
-            <!-- marker for Session High -->
             <div title="Session High"
-                 style="position:absolute;
-                        top:0;
-                        bottom:0;
-                        left:{pos_sess_high:.1f}%;
-                        width:2px;
-                        background-color:#16A34A;
-                        opacity:0.9;">
-            </div>
+                 style="position:absolute; top:0; bottom:0;
+                        left:{sess_hi_pct:.1f}%; width:2px;
+                        background-color:#16A34A; opacity:0.9;"></div>
         </div>
 
         <div style="display:flex; justify-content:space-between;
-                    font-size:0.75rem; color:#6B7280; margin-top:2px;">
-            <span>Session Low: {session_low:.2f}</span>
-            <span>Last: {current_price:.2f}</span>
-            <span>Session High: {session_high:.2f}</span>
+                    font-size:0.75rem; color:#6B7280;">
+            <span>Min(ext)</span>
+            <span>Max(ext)</span>
         </div>
     """
     container.markdown(html, unsafe_allow_html=True)
@@ -721,68 +687,17 @@ def _render_ma_cards(container, ma_rows):
         """
         cols[i % 2].markdown(html, unsafe_allow_html=True)
 
-# ----- helper: MA ladder (Option E) -----
-def _render_ma_ladder(container, ma_rows):
-    if not ma_rows:
-        container.info("No moving average columns found in es_30m.")
-        return
-
-    container.markdown("**MA distance ladder**")
-
-    # Compute max abs distance for scaling
-    dists = [abs(m["dist"]) for m in ma_rows if not pd.isna(m["dist"])]
-    max_abs = max(dists) if dists else 0.0
-    if max_abs == 0:
-        max_abs = 1.0
-
-    rows_html = ""
-    for ma in ma_rows:
-        label = ma["label"]
-        dist = ma["dist"]
-        if pd.isna(dist):
-            bar_width = 0.0
-            color = "#E5E7EB"
-            dist_text = "N/A"
-        else:
-            frac = min(1.0, abs(dist) / max_abs)
-            bar_width = 5 + frac * 95  # at least some visible bar
-            if dist > 0:
-                color = "#16A34A"  # green-600
-            elif dist < 0:
-                color = "#DC2626"  # red-600
-            else:
-                color = "#6B7280"
-            dist_text = f"{dist:+.1f} pts"
-
-        rows_html += f"""
-            <div style="margin-bottom:4px;">
-                <div style="display:flex; justify-content:space-between;
-                            font-size:0.8rem; color:#374151;">
-                    <span>{label}</span>
-                    <span>{dist_text}</span>
-                </div>
-                <div style="height:8px; background-color:#E5E7EB;
-                            border-radius:999px; overflow:hidden;">
-                    <div style="width:{bar_width:.1f}%; height:100%; background-color:{color};">
-                    </div>
-                </div>
-            </div>
-        """
-
-    container.markdown(f"<div>{rows_html}</div>", unsafe_allow_html=True)
-
 # ----- build data needed for these visuals -----
 current_close = row.get("day_close", np.nan)
-session_low_at_cutoff = row.get("session_low_at_cutoff", np.nan)
-session_high_at_cutoff = row.get("session_high_at_cutoff", np.nan)
+sess_low = row.get("session_low_at_cutoff", np.nan)
+sess_high = row.get("session_high_at_cutoff", np.nan)
 
-# Prior RTH range (from es_trade_day_summary)
+# Prior RTH range (from es_trade_day_summary) – NOTE quoted column names
 prev_rth_low = prev_rth_high = np.nan
 try:
-    # Use quoted column names, then rename for convenience
     summ_resp = (
         sb.table("es_trade_day_summary")
-          .select('trade_date,"RTH Hi","RTH Lo"')
+          .select('trade_date, "RTH Hi", "RTH Lo"')
           .lte("trade_date", row["trade_date"].isoformat())
           .order("trade_date", desc=True)
           .limit(10)
@@ -791,26 +706,24 @@ try:
     summ_df = pd.DataFrame(summ_resp.data)
     if not summ_df.empty:
         summ_df["trade_date"] = pd.to_datetime(summ_df["trade_date"]).dt.date
-        summ_df = summ_df.rename(columns={"RTH Hi": "rth_high", "RTH Lo": "rth_low"})
         latest_date = row["trade_date"]
         prev_mask = summ_df["trade_date"] < latest_date
         if prev_mask.any():
             prev_row = summ_df.loc[prev_mask].sort_values("trade_date").iloc[-1]
         else:
-            # fallback: use latest available as "prior"
             prev_row = summ_df.sort_values("trade_date").iloc[-1]
-        prev_rth_low = prev_row.get("rth_low", np.nan)
-        prev_rth_high = prev_row.get("rth_high", np.nan)
+        prev_rth_low = prev_row.get("RTH Lo", np.nan)
+        prev_rth_high = prev_row.get("RTH Hi", np.nan)
 except Exception as e:
     st.warning(f"Could not load es_trade_day_summary for prior RTH range: {e}")
 
 _render_range_position_bar(
     col_range,
-    current_price=current_close,
-    rth_low=prev_rth_low,
-    rth_high=prev_rth_high,
-    session_low=session_low_at_cutoff,
-    session_high=session_high_at_cutoff,
+    current_close,
+    sess_low,
+    sess_high,
+    prev_rth_low,
+    prev_rth_high,
 )
 
 # Moving averages for the latest bar of the latest trade_day
@@ -824,19 +737,17 @@ try:
         ma_candidates = ["5MA", "10MA", "20MA", "50MA", "200MA"]
         ma_cols = [c for c in ma_candidates if c in df.columns]
 
-        for col_name in ma_cols:
-            val = last_bar.get(col_name, np.nan)
+        for col in ma_cols:
+            val = last_bar.get(col, np.nan)
+            dist = np.nan
             if pd.notna(price) and pd.notna(val):
                 dist = price - val
-            else:
-                dist = np.nan
-            ma_rows.append({"label": col_name, "value": val, "dist": dist})
+            ma_rows.append({"label": col, "value": val, "dist": dist})
 
 except Exception as e:
     st.warning(f"Could not compute MA context: {e}")
 
 _render_ma_cards(col_ma_cards, ma_rows)
-_render_ma_ladder(col_ma_ladder, ma_rows)
 
 # =========================
 # Table (last N trade days)
