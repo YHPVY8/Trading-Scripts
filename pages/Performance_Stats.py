@@ -300,11 +300,10 @@ df_stats = _load_trades()
 if df_stats.empty:
     st.info("No trades yet.")
 else:
-    df_stats["pnl_net"] = pd.to_numeric(
-        df_stats["pnl_net"], errors="coerce"
-    ).fillna(0.0)
+    # Ensure numeric
+    df_stats["pnl_net"] = pd.to_numeric(df_stats["pnl_net"], errors="coerce").fillna(0.0)
 
-    # ---- High-level performance metrics ----
+    # ---- High-level performance metrics (per-trade) ----
     wins_mask = df_stats["pnl_net"] > 0
     losses_mask = df_stats["pnl_net"] < 0
     n_wins = int(wins_mask.sum())
@@ -321,9 +320,11 @@ else:
     c3.metric("Avg Loss", f"{avg_loss:,.2f}")
     c4.metric("Total PnL", f"{total_pnl:,.2f}")
 
-        # ---- New: Day-level metrics row (below top metrics) ----
-    # Use Globex trade date so days align with your trading calendar
-    _had_trade_date = "trade_date" in df_stats.columns
+    # ---- Daily overview metrics (row under top metrics) ----
+    st.divider()
+    st.markdown("#### Daily Overview")
+
+    # Compute Globex trade date ONCE and reuse below
     df_stats["trade_date"] = df_stats["entry_ts_est"].apply(_globex_trade_date)
 
     daily_top = (
@@ -357,11 +358,6 @@ else:
     d5.metric("Best Trade", f"{best_trade:,.2f}")
     d6.metric("Worst Trade", f"{worst_trade:,.2f}")
 
-    # If you don't want trade_date set yet for later sections, you can revert it:
-    # if not _had_trade_date:
-    #     df_stats.drop(columns=["trade_date"], inplace=True)
-
-
     # ---- Equity curve ----
     st.markdown("### Equity Curve (Cumulative PnL)")
     eq = df_stats.sort_values("entry_ts_est").copy()
@@ -378,8 +374,7 @@ else:
     )
     st.altair_chart(eq_chart, use_container_width=True)
 
-    # ---- Daily summary (using Globex trade date) ----
-    df_stats["trade_date"] = df_stats["entry_ts_est"].apply(_globex_trade_date)
+    # ---- Daily summary (using same Globex trade date) ----
     daily = (
         df_stats.groupby("trade_date")
         .agg(
@@ -387,14 +382,8 @@ else:
             n_trades=("pnl_net", "size"),
             wins=("pnl_net", lambda s: (s > 0).sum()),
             losses=("pnl_net", lambda s: (s < 0).sum()),
-            avg_win=(
-                "pnl_net",
-                lambda s: s[s > 0].mean() if (s > 0).any() else 0.0,
-            ),
-            avg_loss=(
-                "pnl_net",
-                lambda s: s[s < 0].mean() if (s < 0).any() else 0.0,
-            ),
+            avg_win=("pnl_net", lambda s: s[s > 0].mean() if (s > 0).any() else 0.0),
+            avg_loss=("pnl_net", lambda s: s[s < 0].mean() if (s < 0).any() else 0.0),
         )
         .reset_index()
     )
@@ -416,13 +405,9 @@ else:
     )
     month_daily = daily[daily["month_period"] == selected_period].copy()
 
-    monthly_pnl = (
-        float(month_daily["pnl_day"].sum()) if not month_daily.empty else 0.0
-    )
+    monthly_pnl = float(month_daily["pnl_day"].sum()) if not month_daily.empty else 0.0
     monthly_pnl_str = f"${monthly_pnl:,.2f}"
-    monthly_color = (
-        "red" if monthly_pnl < 0 else ("green" if monthly_pnl > 0 else "black")
-    )
+    monthly_color = "red" if monthly_pnl < 0 else ("green" if monthly_pnl > 0 else "black")
     st.markdown(
         f"<h4 style='text-align:center; margin-bottom:0.25rem;'>Monthly PnL: "
         f"<span style='color:{monthly_color};'>{monthly_pnl_str}</span></h4>",
@@ -461,14 +446,8 @@ else:
             wins=("pnl_net", lambda s: (s > 0).sum()),
             losses=("pnl_net", lambda s: (s < 0).sum()),
             pnl=("pnl_net", "sum"),
-            avg_win=(
-                "pnl_net",
-                lambda s: s[s > 0].mean() if (s > 0).any() else 0.0,
-            ),
-            avg_loss=(
-                "pnl_net",
-                lambda s: s[s < 0].mean() if (s < 0).any() else 0.0,
-            ),
+            avg_win=("pnl_net", lambda s: s[s > 0].mean() if (s > 0).any() else 0.0),
+            avg_loss=("pnl_net", lambda s: s[s < 0].mean() if (s < 0).any() else 0.0),
         )
         .reset_index()
     )
@@ -518,14 +497,8 @@ else:
             wins=("pnl_net", lambda s: (s > 0).sum()),
             losses=("pnl_net", lambda s: (s < 0).sum()),
             pnl=("pnl_net", "sum"),
-            avg_win=(
-                "pnl_net",
-                lambda s: s[s > 0].mean() if (s > 0).any() else 0.0,
-            ),
-            avg_loss=(
-                "pnl_net",
-                lambda s: s[s < 0].mean() if (s < 0).any() else 0.0,
-            ),
+            avg_win=("pnl_net", lambda s: s[s > 0].mean() if (s > 0).any() else 0.0),
+            avg_loss=("pnl_net", lambda s: s[s < 0].mean() if (s < 0).any() else 0.0),
         )
         .reset_index()
     )
