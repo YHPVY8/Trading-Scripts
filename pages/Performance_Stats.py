@@ -58,30 +58,18 @@ def _classify_session(ts):
     h, m, s = t.hour, t.minute, t.second
     seconds = h * 3600 + m * 60 + s
 
-    # Overnight 18:00:00–23:59:59 or 00:00:00–03:59:59
     if seconds >= 18 * 3600 or seconds <= 3 * 3600 + 59 * 60 + 59:
         return "Overnight (18:00–03:59:59)"
-
-    # Premarket 04:00:00–09:29:59
     if 4 * 3600 <= seconds <= 9 * 3600 + 29 * 60 + 59:
         return "Premarket (04:00–09:29:59)"
-
-    # RTH IB 09:30:00–10:29:59
     if 9 * 3600 + 30 * 60 <= seconds <= 10 * 3600 + 29 * 60 + 59:
         return "RTH IB (09:30–10:29:59)"
-
-    # RTH Morning 10:30:00–11:59:59
     if 10 * 3600 + 30 * 60 <= seconds <= 11 * 3600 + 59 * 60 + 59:
         return "RTH Morning (10:30–11:59:59)"
-
-    # Lunch 12:00:00–13:29:59
     if 12 * 3600 <= seconds <= 13 * 3600 + 29 * 60 + 59:
         return "Lunch (12:00–13:29:59)"
-
-    # Afternoon 13:30:00–17:59:59
     if 13 * 3600 + 30 * 60 <= seconds <= 17 * 3600 + 59 * 60 + 59:
         return "Afternoon (13:30–17:59:59)"
-
     return "Other"
 
 
@@ -98,34 +86,21 @@ def _globex_trade_date(ts: pd.Timestamp):
     t = ts.time()
     seconds = t.hour * 3600 + t.minute * 60 + t.second
 
-    # If trade is after 18:00, move to next calendar day
     if seconds >= 18 * 3600:
         ts = ts + pd.Timedelta(days=1)
-
-    # Normalize to midnight of that effective trade date
     return ts.normalize()
 
 
 # ===== Calendar renderer (HTML table – medium size, centered) =====
 def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
-    """
-    Render a month calendar with:
-      - Columns: Mo, Tu, We, Th, Fr, Week
-      - Square tiles per weekday
-      - Day number top-left
-      - PnL + trades vertically centered
-    Uses components.html so HTML is never escaped.
-    """
     if month_daily.empty:
         st.info("No trades for this month.")
         return
 
-    # Map date -> stats
     month_daily = month_daily.copy()
     month_daily["date_only"] = month_daily["trade_date"].dt.date
     by_date = month_daily.set_index("date_only")[["pnl_day", "n_trades"]].to_dict("index")
 
-    # Calendar bounds
     first_ts = period.to_timestamp()
     year, month = first_ts.year, first_ts.month
     first_day = date(year, month, 1)
@@ -136,90 +111,32 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
     weekday_mon0 = first_day.weekday()
     start_date = first_day - timedelta(days=weekday_mon0)
 
-    # CSS — IMPORTANT: cal-cell stays a table cell (NOT flex!)
     css = """
     <style>
-    .cal-table-wrapper {
-        display: flex;
-        justify-content: center;
-        margin-top: 0.5rem;
-    }
-    .cal-table {
-        border-collapse: separate;
-        border-spacing: 4px;
-    }
-    .cal-header-cell {
-        text-align: center;
-        font-weight: 600;
-        font-size: 0.85rem;
-    }
-    .cal-cell {
-        width: 120px;
-        height: 120px;
-        border-radius: 4px;
-        border: 1px solid #b0b0b0;
-        padding: 4px;
-        vertical-align: top;
-        position: relative; /* needed for absolute PnL centering */
-        font-size: 0.85rem;
-    }
-    .cal-day-label {
-        font-size: 1.0rem;
-        font-weight: 600;
-        color: #000;
-        opacity: 0.9;
-        margin-bottom: 2px;
-    }
-
-    /* Center PnL + trades vertically */
-    .cal-center-content {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -30%);  /* visually balanced */
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .cal-pnl {
-        font-size: 1.15rem;
-        font-weight: 700;
-        color: #000;
-    }
-    .cal-trades {
-        font-size: 0.95rem;
-        opacity: 0.85;
-    }
-    .cal-week-summary {
-        font-size: 1.15rem;
-        text-align: center;
-        color: #000;
-    }
-    .cal-empty {
-        border: none;
-        background-color: transparent;
-    }
+    .cal-table-wrapper { display: flex; justify-content: center; margin-top: 0.5rem; }
+    .cal-table { border-collapse: separate; border-spacing: 4px; }
+    .cal-header-cell { text-align: center; font-weight: 600; font-size: 0.85rem; }
+    .cal-cell { width: 120px; height: 120px; border-radius: 4px; border: 1px solid #b0b0b0;
+                padding: 4px; vertical-align: top; position: relative; font-size: 0.85rem; }
+    .cal-day-label { font-size: 1.0rem; font-weight: 600; color: #000; opacity: 0.9; margin-bottom: 2px; }
+    .cal-center-content { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -30%);
+                          display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    .cal-pnl { font-size: 1.15rem; font-weight: 700; color: #000; }
+    .cal-trades { font-size: 0.95rem; opacity: 0.85; }
+    .cal-week-summary { font-size: 1.15rem; text-align: center; color: #000; }
+    .cal-empty { border: none; background-color: transparent; }
     </style>
     """
 
-    # Build HTML
     rows_html = []
-
-    header_cells = "".join(
-        f"<th class='cal-header-cell'>{name}</th>"
-        for name in ["Mo", "Tu", "We", "Th", "Fr", "Week"]
-    )
+    header_cells = "".join(f"<th class='cal-header-cell'>{name}</th>" for name in ["Mo", "Tu", "We", "Th", "Fr", "Week"])
     rows_html.append(f"<tr>{header_cells}</tr>")
 
     week_counter = 0
-
     for week_idx in range(6):
         row_start = start_date + timedelta(days=7 * week_idx)
         week_dates = [row_start + timedelta(days=d) for d in range(7)]
 
-        # Does this row include a day of the selected month?
         has_month_day = any(d.month == month and d.year == year for d in week_dates[:5])
         if not has_month_day and row_start > last_day:
             break
@@ -229,32 +146,26 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
         week_counter += 1
 
         in_week = month_daily[
-            (month_daily["trade_date"].dt.date >= week_dates[0])
-            & (month_daily["trade_date"].dt.date <= week_dates[4])
+            (month_daily["trade_date"].dt.date >= week_dates[0]) &
+            (month_daily["trade_date"].dt.date <= week_dates[4])
         ]
         week_pnl = float(in_week["pnl_day"].sum()) if not in_week.empty else 0.0
         week_trades = int(in_week["n_trades"].sum()) if not in_week.empty else 0
 
         row_cells = []
-
-        # Mon–Fri
         for i_day in range(5):
             d = week_dates[i_day]
-
             if d.month != month or d.year != year:
                 row_cells.append("<td class='cal-cell cal-empty'></td>")
                 continue
-
             stats = by_date.get(d)
             pnl = stats["pnl_day"] if stats else 0.0
             n_trades = stats["n_trades"] if stats else 0
-
             bg_color = "#8fd98f" if pnl > 0 else "#e08b8b" if pnl < 0 else "#d0d0d0"
 
             cell_html = textwrap.dedent(f"""
                 <td class="cal-cell" style="background-color:{bg_color};">
                     <div class="cal-day-label">{d.day}</div>
-
                     <div class="cal-center-content">
                         <div class="cal-pnl">${pnl:,.2f}</div>
                         <div class="cal-trades">{n_trades} trades</div>
@@ -263,14 +174,11 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             """)
             row_cells.append(cell_html)
 
-        # Weekly summary cell
         week_bg = "#7fcf7f" if week_pnl > 0 else "#d16f6f" if week_pnl < 0 else "#c4c4c4"
         week_color = "#004d00" if week_pnl > 0 else "#550000" if week_pnl < 0 else "#000"
-
         week_cell_html = textwrap.dedent(f"""
             <td class="cal-cell" style="background-color:{week_bg};">
                 <div class="cal-day-label">Week {week_counter}</div>
-
                 <div class="cal-center-content">
                     <div class="cal-week-summary" style="color:{week_color}; font-weight:700;">
                         ${week_pnl:,.2f}
@@ -280,16 +188,9 @@ def _render_pnl_calendar(month_daily: pd.DataFrame, period: pd.Period):
             </td>
         """)
         row_cells.append(week_cell_html)
-
         rows_html.append("<tr>" + "".join(row_cells) + "</tr>")
 
-    full_html = (
-        "<div class='cal-table-wrapper'>"
-        "<table class='cal-table'>"
-        + "".join(rows_html)
-        + "</table></div>"
-    )
-
+    full_html = "<div class='cal-table-wrapper'><table class='cal-table'>" + "".join(rows_html) + "</table></div>"
     components.html(css + full_html, height=620, scrolling=False)
 
 
@@ -327,36 +228,67 @@ else:
     # Compute Globex trade date ONCE and reuse below
     df_stats["trade_date"] = df_stats["entry_ts_est"].apply(_globex_trade_date)
 
-    daily_top = (
+    # Headline daily aggregates for metrics
+    daily_headline = (
         df_stats.groupby("trade_date", dropna=True, as_index=False)
-        .agg(pnl_day=("pnl_net", "sum"))
+        .agg(
+            pnl_day=("pnl_net", "sum"),
+            n_trades=("pnl_net", "size"),
+        )
         .sort_values("trade_date")
     )
 
-    days_traded = int(len(daily_top))
+    days_traded = int(len(daily_headline))
     if days_traded > 0:
-        day_win_rate = float((daily_top["pnl_day"] > 0).mean())
+        day_win_rate = float((daily_headline["pnl_day"] > 0).mean())
         avg_daily_win = float(
-            daily_top.loc[daily_top["pnl_day"] > 0, "pnl_day"].mean()
-        ) if (daily_top["pnl_day"] > 0).any() else 0.0
+            daily_headline.loc[daily_headline["pnl_day"] > 0, "pnl_day"].mean()
+        ) if (daily_headline["pnl_day"] > 0).any() else 0.0
         avg_daily_loss = float(
-            daily_top.loc[daily_top["pnl_day"] < 0, "pnl_day"].mean()
-        ) if (daily_top["pnl_day"] < 0).any() else 0.0
+            daily_headline.loc[daily_headline["pnl_day"] < 0, "pnl_day"].mean()
+        ) if (daily_headline["pnl_day"] < 0).any() else 0.0
+
+        # Best/Worst day and their dates (for delta display)
+        best_row = daily_headline.loc[daily_headline["pnl_day"].idxmax()]
+        worst_row = daily_headline.loc[daily_headline["pnl_day"].idxmin()]
+        best_day_value = float(best_row["pnl_day"])
+        worst_day_value = float(worst_row["pnl_day"])
+        best_day_date = pd.to_datetime(best_row["trade_date"]).strftime("%m/%d/%y")
+        worst_day_date = pd.to_datetime(worst_row["trade_date"]).strftime("%m/%d/%y")
+
+        # Avg trades per winning/losing day
+        avg_trades_win_day = float(
+            daily_headline.loc[daily_headline["pnl_day"] > 0, "n_trades"].mean()
+        ) if (daily_headline["pnl_day"] > 0).any() else 0.0
+        avg_trades_loss_day = float(
+            daily_headline.loc[daily_headline["pnl_day"] < 0, "n_trades"].mean()
+        ) if (daily_headline["pnl_day"] < 0).any() else 0.0
     else:
         day_win_rate = 0.0
         avg_daily_win = 0.0
         avg_daily_loss = 0.0
+        best_day_value = 0.0
+        worst_day_value = 0.0
+        best_day_date = ""
+        worst_day_date = ""
+        avg_trades_win_day = 0.0
+        avg_trades_loss_day = 0.0
 
-    best_trade = float(df_stats["pnl_net"].max()) if not df_stats.empty else 0.0
-    worst_trade = float(df_stats["pnl_net"].min()) if not df_stats.empty else 0.0
-
+    # First row you asked for previously
     d1, d2, d3, d4, d5, d6 = st.columns(6)
     d1.metric("Days Traded", f"{days_traded:,}")
     d2.metric("Day Win Rate", f"{day_win_rate:.1%}")
     d3.metric("Avg Daily Win", f"{avg_daily_win:,.2f}")
     d4.metric("Avg Daily Loss", f"{avg_daily_loss:,.2f}")
-    d5.metric("Best Trade", f"{best_trade:,.2f}")
-    d6.metric("Worst Trade", f"{worst_trade:,.2f}")
+    d5.metric("Best Trade", f"{float(df_stats['pnl_net'].max() if not df_stats.empty else 0.0):,.2f}")
+    d6.metric("Worst Trade", f"{float(df_stats['pnl_net'].min() if not df_stats.empty else 0.0):,.2f}")
+
+    # New second row you requested now
+    e1, e2, e3, e4 = st.columns(4)
+    e1.metric("Best Day", f"{best_day_value:,.2f}", delta=best_day_date if best_day_date else None)
+    e2.metric("Worst Day", f"{worst_day_value:,.2f}", delta=worst_day_date if worst_day_date else None)
+    e3.metric("# Avg Trades / Winning Day", f"{avg_trades_win_day:.2f}")
+    e4.metric("# Avg Trades / Losing Day", f"{avg_trades_loss_day:.2f}")
 
     # ---- Equity curve ----
     st.markdown("### Equity Curve (Cumulative PnL)")
@@ -388,9 +320,7 @@ else:
         .reset_index()
     )
     daily["win_rate"] = daily.apply(
-        lambda r: (r["wins"] / (r["wins"] + r["losses"]))
-        if (r["wins"] + r["losses"]) > 0
-        else 0.0,
+        lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
         axis=1,
     )
 
@@ -416,7 +346,7 @@ else:
 
     _render_pnl_calendar(month_daily, selected_period)
 
-    # ---- Daily table: # Trades, PnL, Avg Win, Avg Loss, Win rate (%), Date mm/dd/yy ----
+    # ---- Daily table ----
     st.markdown("#### Daily Stats")
     if month_daily.empty:
         st.info("No trades for this month.")
@@ -452,9 +382,7 @@ else:
         .reset_index()
     )
     session_stats["win_rate"] = session_stats.apply(
-        lambda r: (r["wins"] / (r["wins"] + r["losses"]))
-        if (r["wins"] + r["losses"]) > 0
-        else 0.0,
+        lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
         axis=1,
     )
 
@@ -467,20 +395,11 @@ else:
         "Afternoon (13:30–17:59:59)",
         "Other",
     ]
-    session_stats["Session"] = pd.Categorical(
-        session_stats["session"],
-        categories=session_order,
-        ordered=True,
-    )
+    session_stats["Session"] = pd.Categorical(session_stats["session"], categories=session_order, ordered=True)
     session_stats["Win rate (%)"] = (session_stats["win_rate"] * 100).round(1)
     session_display = (
         session_stats.rename(
-            columns={
-                "n_trades": "# Trades",
-                "pnl": "PnL",
-                "avg_win": "Avg Win",
-                "avg_loss": "Avg Loss",
-            }
+            columns={"n_trades": "# Trades", "pnl": "PnL", "avg_win": "Avg Win", "avg_loss": "Avg Loss"}
         )[["Session", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]]
         .sort_values("Session")
     )
@@ -503,22 +422,61 @@ else:
         .reset_index()
     )
     symbol_stats["win_rate"] = symbol_stats.apply(
-        lambda r: (r["wins"] / (r["wins"] + r["losses"]))
-        if (r["wins"] + r["losses"]) > 0
-        else 0.0,
+        lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
         axis=1,
     )
     symbol_stats["Win rate (%)"] = (symbol_stats["win_rate"] * 100).round(1)
     symbol_display = (
         symbol_stats.rename(
+            columns={"symbol": "Symbol", "n_trades": "# Trades", "pnl": "PnL", "avg_win": "Avg Win", "avg_loss": "Avg Loss"}
+        )[["Symbol", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]]
+        .sort_values("Symbol")
+    )
+    st.dataframe(symbol_display, use_container_width=False)
+
+    # ---- Direction stats (Long vs Short) ----
+    st.markdown("### Direction Performance")
+    # Normalize direction labels from 'side'
+    df_dir = df_stats.copy()
+    # Standardize to 'Long' / 'Short' (fallback 'Unknown' if missing)
+    side_map = {"long": "Long", "short": "Short", "buy": "Long", "sell": "Short", "l": "Long", "s": "Short"}
+    df_dir["Direction"] = (
+        df_dir["side"].astype(str).str.strip().str.lower().map(side_map).fillna(
+            df_dir["side"].astype(str).str.strip().str.title().replace({"Nan": "Unknown"})
+        )
+    )
+
+    direction_stats = (
+        df_dir.groupby("Direction")
+        .agg(
+            n_trades=("pnl_net", "size"),
+            wins=("pnl_net", lambda s: (s > 0).sum()),
+            losses=("pnl_net", lambda s: (s < 0).sum()),
+            pnl=("pnl_net", "sum"),
+            avg_win=("pnl_net", lambda s: s[s > 0].mean() if (s > 0).any() else 0.0),
+            avg_loss=("pnl_net", lambda s: s[s < 0].mean() if (s < 0).any() else 0.0),
+        )
+        .reset_index()
+    )
+    direction_stats["win_rate"] = direction_stats.apply(
+        lambda r: (r["wins"] / (r["wins"] + r["losses"])) if (r["wins"] + r["losses"]) > 0 else 0.0,
+        axis=1,
+    )
+    direction_stats["Win rate (%)"] = (direction_stats["win_rate"] * 100).round(1)
+
+    # Order Long, Short, then others
+    cat_order = pd.Categorical(direction_stats["Direction"], categories=["Long", "Short", "Unknown"], ordered=True)
+    direction_stats["Direction"] = cat_order
+
+    direction_display = (
+        direction_stats.sort_values("Direction")
+        .rename(
             columns={
-                "symbol": "Symbol",
                 "n_trades": "# Trades",
                 "pnl": "PnL",
                 "avg_win": "Avg Win",
                 "avg_loss": "Avg Loss",
             }
-        )[["Symbol", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]]
-        .sort_values("Symbol")
+        )[["Direction", "# Trades", "PnL", "Avg Win", "Avg Loss", "Win rate (%)"]]
     )
-    st.dataframe(symbol_display, use_container_width=False)
+    st.dataframe(direction_display, use_container_width=False)
