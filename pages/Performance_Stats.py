@@ -321,6 +321,47 @@ else:
     c3.metric("Avg Loss", f"{avg_loss:,.2f}")
     c4.metric("Total PnL", f"{total_pnl:,.2f}")
 
+        # ---- New: Day-level metrics row (below top metrics) ----
+    # Use Globex trade date so days align with your trading calendar
+    _had_trade_date = "trade_date" in df_stats.columns
+    df_stats["trade_date"] = df_stats["entry_ts_est"].apply(_globex_trade_date)
+
+    daily_top = (
+        df_stats.groupby("trade_date", dropna=True, as_index=False)
+        .agg(pnl_day=("pnl_net", "sum"))
+        .sort_values("trade_date")
+    )
+
+    days_traded = int(len(daily_top))
+    if days_traded > 0:
+        day_win_rate = float((daily_top["pnl_day"] > 0).mean())
+        avg_daily_win = float(
+            daily_top.loc[daily_top["pnl_day"] > 0, "pnl_day"].mean()
+        ) if (daily_top["pnl_day"] > 0).any() else 0.0
+        avg_daily_loss = float(
+            daily_top.loc[daily_top["pnl_day"] < 0, "pnl_day"].mean()
+        ) if (daily_top["pnl_day"] < 0).any() else 0.0
+    else:
+        day_win_rate = 0.0
+        avg_daily_win = 0.0
+        avg_daily_loss = 0.0
+
+    best_trade = float(df_stats["pnl_net"].max()) if not df_stats.empty else 0.0
+    worst_trade = float(df_stats["pnl_net"].min()) if not df_stats.empty else 0.0
+
+    d1, d2, d3, d4, d5, d6 = st.columns(6)
+    d1.metric("Days Traded", f"{days_traded:,}")
+    d2.metric("Day Win Rate", f"{day_win_rate:.1%}")
+    d3.metric("Avg Daily Win", f"{avg_daily_win:,.2f}")
+    d4.metric("Avg Daily Loss", f"{avg_daily_loss:,.2f}")
+    d5.metric("Best Trade", f"{best_trade:,.2f}")
+    d6.metric("Worst Trade", f"{worst_trade:,.2f}")
+
+    # If you don't want trade_date set yet for later sections, you can revert it:
+    # if not _had_trade_date:
+    #     df_stats.drop(columns=["trade_date"], inplace=True)
+
+
     # ---- Equity curve ----
     st.markdown("### Equity Curve (Cumulative PnL)")
     eq = df_stats.sort_values("entry_ts_est").copy()
