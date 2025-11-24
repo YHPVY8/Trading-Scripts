@@ -1,194 +1,168 @@
 #!/usr/bin/env python3
 import streamlit as st
-import numpy as np
-import pandas as pd
-import altair as alt
 
-st.set_page_config(page_title="Range Bar Test Page", layout="wide")
-
+st.set_page_config(page_title="Range Bar Test", layout="wide")
 st.title("Range Bar Test Page")
-st.caption(
-    "Play with the inputs below to test intraday range visualizations "
-    "(prior RTH range vs current session range and last price)."
-)
 
-# ============================================
-# Inputs (no DB – just manual for testing)
-# ============================================
-st.markdown("### Inputs")
+# ============================================================
+# The sample data you provided
+# ============================================================
+prior_low = 6539.00
+prior_high = 6677.50
+last_price = 6636.75
+session_low = 6625.00
+session_high = 6669.25
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    prior_low = st.number_input("Prior RTH Low", value=6850.0, step=0.25)
-    prior_high = st.number_input("Prior RTH High", value=6900.0, step=0.25)
-with c2:
-    session_low = st.number_input("Current Session Low", value=6865.0, step=0.25)
-    session_high = st.number_input("Current Session High", value=6935.0, step=0.25)
-with c3:
-    last_price = st.number_input("Last Price", value=6925.0, step=0.25)
+st.write("### Sample Data Being Used")
+st.write({
+    "Prior RTH Low": prior_low,
+    "Prior RTH High": prior_high,
+    "Last Price": last_price,
+    "Session Low": session_low,
+    "Session High": session_high,
+})
 
-# Sanity guard: make sure highs > lows to avoid weird math
-if prior_high <= prior_low:
-    st.error("Prior RTH High must be greater than Prior RTH Low.")
-    st.stop()
-if session_high <= session_low:
-    st.error("Current Session High must be greater than Current Session Low.")
-    st.stop()
+# Helper to normalize any value 0–100% along the bar
+def scale(v):
+    return (v - prior_low) / (prior_high - prior_low) * 100
 
-# Global min/max to scale 0–100% across ALL prices involved
-all_vals = [prior_low, prior_high, session_low, session_high, last_price]
-min_all = float(np.nanmin(all_vals))
-max_all = float(np.nanmax(all_vals))
-if max_all == min_all:
-    max_all = min_all + 1.0  # avoid div/0
 
-span_all = max_all - min_all
+# ===================================================================
+# EXAMPLE 1 — Hollow prior range box + current session overlay + labels
+# ===================================================================
+st.markdown("## Example 1 — Hollow Box With Current Session Overlay")
 
-def _pct(p: float) -> float:
-    """Map price -> 0–100% across full combined range."""
-    return (p - min_all) / span_all * 100.0
+# Compute positions
+p_low = scale(prior_low)
+p_high = scale(prior_high)
+s_low = scale(session_low)
+s_high = scale(session_high)
+last = scale(last_price)
 
-# positions for HTML example
-prior_left = _pct(prior_low)
-prior_width = _pct(prior_high) - prior_left
+html_1 = f"""
+<div style="position:relative; height:90px; margin-top:20px;">
 
-sess_left = _pct(session_low)
-sess_width = _pct(session_high) - sess_left
-
-last_pos = _pct(last_price)
-
-# ============================================
-# Example 1 – HTML overlay range bar
-# ============================================
-
-st.markdown("### Example 1 – Overlay Range Bar (HTML)")
-
-st.write(
-    "• Grey hollow bar = **prior RTH range**  \n"
-    "• Blue filled bar = **current session range**  \n"
-    "• Black line = **last price**"
-)
-
-# Labels above / below to keep HTML simple
-c_top1, c_top2, c_top3 = st.columns(3)
-c_top1.markdown(f"**Prior RTH Low:** {prior_low:.2f}")
-c_top2.markdown(f"**Prior RTH High:** {prior_high:.2f}")
-c_top3.markdown(f"**Last Price:** {last_price:.2f}")
-
-c_mid1, c_mid2 = st.columns(2)
-c_mid1.markdown(f"**Session Low:** {session_low:.2f}")
-c_mid2.markdown(f"**Session High:** {session_high:.2f}")
-
-# HTML bar
-html_bar = f"""
-<div style="position:relative;
-            width:100%;
-            height:60px;
-            margin-top:8px;
-            margin-bottom:8px;
-            border-radius:10px;
-            background-color:#F3F4F6;
-            border:1px solid #D1D5DB;
-            overflow:hidden;">
-
-  <!-- prior RTH hollow range -->
-  <div style="
+    <!-- Prior Range Hollow Box -->
+    <div style="
         position:absolute;
-        top:20%;
-        height:60%;
-        left:{prior_left:.1f}%;
-        width:{prior_width:.1f}%;
+        top:30px;
+        left:{p_low}%;
+        width:{p_high - p_low}%;
+        height:30px;
+        border:2px solid #4B5563;
+        background-color:rgba(0,0,0,0);
         border-radius:6px;
-        border:2px solid #9CA3AF;
-        background-color:rgba(209,213,219,0.15);
-  "></div>
+    "></div>
 
-  <!-- current session filled range -->
-  <div style="
+    <!-- Current Session Fill -->
+    <div style="
         position:absolute;
-        top:35%;
-        height:30%;
-        left:{sess_left:.1f}%;
-        width:{sess_width:.1f}%;
+        top:30px;
+        left:{s_low}%;
+        width:{s_high - s_low}%;
+        height:30px;
+        background-color:rgba(37,99,235,0.35);
         border-radius:6px;
-        background-color:rgba(37,99,235,0.50);
-  "></div>
+    "></div>
 
-  <!-- last price marker -->
-  <div style="
+    <!-- Last Price Marker -->
+    <div style="
         position:absolute;
-        top:10%;
-        bottom:10%;
-        left:{last_pos:.1f}%;
-        width:2px;
+        top:26px;
+        left:{last}%;
+        width:3px;
+        height:38px;
         background-color:#111827;
-  "></div>
+    "></div>
+
+    <!-- Labels above for prior range -->
+    <div style="position:absolute; top:0; left:{p_low}%; transform:translateX(-50%); font-size:0.8rem;">
+        Prior Low<br>{prior_low}
+    </div>
+    <div style="position:absolute; top:0; left:{p_high}%; transform:translateX(-50%); font-size:0.8rem;">
+        Prior High<br>{prior_high}
+    </div>
+
+    <!-- Labels below for session range -->
+    <div style="position:absolute; top:70px; left:{s_low}%; transform:translateX(-50%); font-size:0.8rem; color:#DC2626;">
+        Session Low<br>{session_low}
+    </div>
+    <div style="position:absolute; top:70px; left:{s_high}%; transform:translateX(-50%); font-size:0.8rem; color:#16A34A;">
+        Session High<br>{session_high}
+    </div>
+
+    <!-- Label for last price -->
+    <div style="position:absolute; top:70px; left:{last}%; transform:translateX(-50%); font-size:0.9rem; font-weight:600;">
+        Last<br>{last_price}
+    </div>
 
 </div>
 """
+st.markdown(html_1, unsafe_allow_html=True)
 
-st.markdown(html_bar, unsafe_allow_html=True)
 
-st.caption(
-    "This bar is built with plain HTML/CSS. All positioning is scaled between the "
-    "minimum and maximum of: prior RTH low/high, session low/high, and last price."
-)
+# ===================================================================
+# EXAMPLE 2 — Thick horizontal bar with clear labels and session overlay
+# ===================================================================
+st.markdown("## Example 2 — Solid Backbone Bar With Overlays")
 
-# ============================================
-# Example 2 – Altair horizontal range “candle”
-# ============================================
+backbone_top = 40
+backbone_height = 10
 
-st.markdown("### Example 2 – Horizontal Range Bars (Altair)")
+html_2 = f"""
+<div style="position:relative; height:110px; margin-top:20px;">
 
-st.write(
-    "Here we use Altair to draw overlapping horizontal bars:  \n"
-    "• Grey bar = **prior RTH range**  \n"
-    "• Blue bar = **current session range**  \n"
-    "• Black rule = **last price**"
-)
+    <!-- Backbone bar (prior range) -->
+    <div style="
+        position:absolute;
+        top:{backbone_top}px;
+        left:{p_low}%;
+        width:{p_high - p_low}%;
+        height:{backbone_height}px;
+        background-color:#D1D5DB;
+        border-radius:4px;
+    "></div>
 
-range_df = pd.DataFrame(
-    [
-        {"label": "Prior RTH", "start": prior_low, "end": prior_high, "y": "Range"},
-        {"label": "Current Session", "start": session_low, "end": session_high, "y": "Range"},
-    ]
-)
+    <!-- Session Range Overlay -->
+    <div style="
+        position:absolute;
+        top:{backbone_top - 6}px;
+        left:{s_low}%;
+        width:{s_high - s_low}%;
+        height:{backbone_height + 12}px;
+        background-color:rgba(59,130,246,0.3);
+        border-radius:4px;
+    "></div>
 
-base = (
-    alt.Chart(range_df)
-    .mark_bar(height=24)
-    .encode(
-        x=alt.X("start:Q", title="Price"),
-        x2="end:Q",
-        y=alt.Y("y:N", axis=None),
-        color=alt.Color(
-            "label:N",
-            scale=alt.Scale(
-                domain=["Prior RTH", "Current Session"],
-                range=["#9CA3AF", "#2563EB"],
-            ),
-            legend=alt.Legend(title="Range"),
-        ),
-    )
-)
+    <!-- Last Price marker -->
+    <div style="
+        position:absolute;
+        top:{backbone_top - 8}px;
+        left:{last}%;
+        width:3px;
+        height:{backbone_height + 16}px;
+        background-color:#111827;
+    "></div>
 
-last_df = pd.DataFrame({"price": [last_price], "y": ["Range"]})
-last_rule = (
-    alt.Chart(last_df)
-    .mark_rule(color="black", strokeWidth=2)
-    .encode(x="price:Q", y="y:N")
-)
+    <!-- Labels -->
+    <div style="position:absolute; top:0; left:{p_low}%; transform:translateX(-50%); font-size:0.8rem;">
+        Prior Low<br>{prior_low}
+    </div>
+    <div style="position:absolute; top:0; left:{p_high}%; transform:translateX(-50%); font-size:0.8rem;">
+        Prior High<br>{prior_high}
+    </div>
 
-chart = (
-    (base + last_rule)
-    .properties(height=80, width="container")
-    .configure_view(strokeWidth=0)
-)
+    <div style="position:absolute; top:80px; left:{s_low}%; transform:translateX(-50%); font-size:0.8rem; color:#DC2626;">
+        Session Low<br>{session_low}
+    </div>
+    <div style="position:absolute; top:80px; left:{s_high}%; transform:translateX(-50%); font-size:0.8rem; color:#16A34A;">
+        Session High<br>{session_high}
+    </div>
 
-st.altair_chart(chart, use_container_width=True)
+    <div style="position:absolute; top:80px; left:{last}%; transform:translateX(-50%); font-size:0.9rem; font-weight:600;">
+        Last<br>{last_price}
+    </div>
 
-st.caption(
-    "This Altair example is very robust and easy to extend (add text annotations, colors "
-    "for expansions beyond prior range, etc.). Once you pick the style you prefer, we can "
-    "plug real values in from es_trade_day_summary + es_30m."
-)
+</div>
+"""
+st.markdown(html_2, unsafe_allow_html=True)
