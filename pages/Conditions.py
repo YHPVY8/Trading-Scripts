@@ -32,7 +32,71 @@ def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
 def trailing_mean(s: pd.Series, n: int) -> pd.Series:
     return s.rolling(int(n)).mean().shift(1)
 
-def _render_perf_tile(container, label: str, ret: float):
+# =========================
+# Daily performance snapshot from daily_es
+# =========================
+day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
+daily_agg = None
+
+try:
+    perf_resp = (
+        sb.table("daily_es")
+          .select("time, open, close")
+          .order("time", desc=True)
+          .limit(260)
+          .execute()
+    )
+    perf_df = pd.DataFrame(perf_resp.data)
+
+    if not perf_df.empty and {"time","open","close"}.issubset(perf_df.columns):
+        perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
+        perf_df = perf_df.dropna(subset=["time","open","close"])
+
+        daily_agg = (
+            perf_df.groupby("time")
+                   .agg(period_open=("open","first"),
+                        period_close=("close","last"))
+                   .reset_index()
+                   .sort_values("time")
+        )
+
+        if len(daily_agg) >= 1:
+            current_date = daily_agg["time"].iloc[-1]
+
+            if len(daily_agg) >= 2:
+                last_two = daily_agg.tail(2)
+                prev_close = last_two["period_close"].iloc[0]
+                last_close = last_two["period_close"].iloc[1]
+                day_ret = (last_close / prev_close) - 1.0 if prev_close else np.nan
+
+            dt_series = pd.to_datetime(daily_agg["time"])
+            curr_year = current_date.year
+            y_mask = dt_series.dt.year == curr_year
+            y_subset = daily_agg.loc[y_mask]
+            ytd_ret = _period_return_open_to_close(y_subset)
+
+            curr_month = current_date.month
+            m_mask = (dt_series.dt.year == curr_year) & (dt_series.dt.month == curr_month)
+            m_subset = daily_agg.loc[m_mask]
+            mtd_ret = _period_return_open_to_close(m_subset)
+
+            iso_all = dt_series.dt.isocalendar()
+            curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
+            w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
+            w_subset = daily_agg.loc[w_mask]
+            wtd_ret = _period_return_open_to_close(w_subset)
+
+except Exception as e:
+    st.warning(f"Could not load daily_es for performance tiles: {e}")
+
+# =========================
+# Title + top tiles
+# =========================
+st.title("Market Conditions")
+
+c_day, c_week, c_month, c_year = st.columns(4)
+
+def _perf_tile(container, label: str, ret: float):
     if pd.isna(ret):
         display = "—"
         bg = "#E5E7EB"   # gray-200
@@ -73,207 +137,10 @@ def _render_perf_tile(container, label: str, ret: float):
     """
     container.markdown(html, unsafe_allow_html=True)
 
-def _render_range_position_bar_fullwidth(container, current_price, prev_rth_low, prev_rth_high,
-                                         session_low, session_high):
-    """
-    Full-width overlay bar:
-      - Hollow gray rectangle = Prior RTH range
-      - Darker blue pill = Current session range
-      - Black rule = Last price
-      - Labels inside the visualization with padding so they don't clip
-    """
-    vals = [current_price, prev_rth_low, prev_rth_high, session_low, session_high]
-    vals = [v for v in vals if pd.notna(v)]
-    if len(vals) < 3:
-        container.info("Not enough data for range visualization.")
-        return
-
-    # Add 0.5% padding on both sides so labels don’t clip
-    scale_min = min(vals)
-    scale_max = max(vals)
-    pad = (scale_max - scale_min) * 0.005
-    scale_min -= pad
-    scale_max += pad
-    if scale_max <= scale_min:
-        container.info("Invalid range for visualization.")
-        return
-    span = scale_max - scale_min
-
-    def pct(x):  # map price -> 0..100%
-        return 100.0 * (x - scale_min) / span
-
-    prior_left = pct(prev_rth_low)
-    prior_width = max(0.5, pct(prev_rth_high) - prior_left)
-
-    sess_left = pct(session_low)
-    sess_width = max(0.5, pct(session_high) - sess_left)
-
-    last_left = pct(current_price)
-
-    # positions for labels (slightly above for prior, slightly below for session)
-    prior_low_label_left  = pct(prev_rth_low)
-    prior_high_label_left = pct(prev_rth_high)
-
-    session_low_label_left  = pct(session_low)
-    session_high_label_left = pct(session_high)
-
-    html = f"""
-    <div style="margin-top:14px;">
-      <div style="font-weight:600; margin-bottom:6px;">Current range vs prior RTH range</div>
-
-      <div style="position:relative; width:100%; height:84px; border-radius:10px;
-                  background-color:#F8FAFC; border:1px solid #E5E7EB; overflow:hidden;">
-
-        <!-- Base track -->
-        <div style="position:absolute; left:0; right:0; top:36px; height:12px;
-                    background-color:#EEF2F7; border-radius:999px;"></div>
-
-        <!-- Prior RTH hollow rectangle -->
-        <div style="position:absolute; top:30px; height:24px; left:{prior_left:.2f}%;
-                    width:{prior_width:.2f}%; border-radius:12px; border:2px solid #9CA3AF;
-                    background-color:transparent;"></div>
-
-        <!-- Current session filled pill (darker blue) -->
-        <div style="position:absolute; top:36px; height:12px; left:{sess_left:.2f}%;
-                    width:{sess_width:.2f}%; border-radius:999px; background-color:#1D4ED8;"></div>
-
-        <!-- Last price marker -->
-        <div title="Last" style="position:absolute; top:26px; bottom:26px; left:{last_left:.2f}%;">
-          <div style="width:2px; height:100%; background-color:#111827;"></div>
-        </div>
-
-        <!-- Prior labels (top row, inside) -->
-        <div style="position:absolute; top:6px; left:{prior_low_label_left:.2f}%;
-                    transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
-          {prev_rth_low:.2f} <span style="opacity:0.8;">pLo</span>
-        </div>
-        <div style="position:absolute; top:6px; left:{prior_high_label_left:.2f}%;
-                    transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
-          {prev_rth_high:.2f} <span style="opacity:0.8;">pHi</span>
-        </div>
-
-        <!-- Session labels (bottom row, inside) -->
-        <div style="position:absolute; bottom:6px; left:{session_low_label_left:.2f}%;
-                    transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
-          {session_low:.2f} <span style="opacity:0.8;">Lo</span>
-        </div>
-        <div style="position:absolute; bottom:6px; left:{session_high_label_left:.2f}%;
-                    transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
-          {session_high:.2f} <span style="opacity:0.8;">Hi</span>
-        </div>
-      </div>
-    </div>
-    """
-    container.markdown(html, unsafe_allow_html=True)
-
-def _render_ma_row(container, ma_rows):
-    """
-    Renders MA snapshot cards in a single horizontal row.
-    """
-    if not ma_rows:
-        container.info("No moving average columns found in es_30m.")
-        return
-
-    container.markdown("**MA snapshot**")
-    cols = container.columns(len(ma_rows))
-    for i, ma in enumerate(ma_rows):
-        label = ma["label"]
-        val = ma["value"]
-        dist = ma["dist"]
-        if pd.isna(val) or pd.isna(dist):
-            text = "N/A"
-            bg = "#E5E7EB"
-        else:
-            text = f"{val:.2f} ({dist:+.1f} pts)"
-            if dist > 0:
-                bg = "#BBF7D0"  # price above MA
-            elif dist < 0:
-                bg = "#FECACA"  # price below MA
-            else:
-                bg = "#E5E7EB"
-
-        html = f"""
-            <div style="background-color:{bg};
-                        border:1px solid #D1D5DB;
-                        border-radius:10px;
-                        padding:10px 12px;
-                        text-align:center;">
-                <div style="font-size:0.8rem; color:#4B5563; margin-bottom:2px;">
-                    {label}
-                </div>
-                <div style="font-size:1rem; font-weight:600; color:#111827;">
-                    {text}
-                </div>
-            </div>
-        """
-        cols[i].markdown(html, unsafe_allow_html=True)
-
-# =========================
-# Daily performance snapshot from daily_es
-# =========================
-day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
-daily_agg = None
-
-try:
-    perf_resp = (
-        sb.table("daily_es")
-          .select("time, open, close")
-          .order("time", desc=True)
-          .limit(260)
-          .execute()
-    )
-    perf_df = pd.DataFrame(perf_resp.data)
-
-    if not perf_df.empty and {"time","open","close"}.issubset(perf_df.columns):
-        perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
-        perf_df = perf_df.dropna(subset=["time", "open", "close"])
-
-        daily_agg = (
-            perf_df
-            .groupby("time")
-            .agg(period_open=("open","first"), period_close=("close","last"))
-            .reset_index()
-            .sort_values("time")
-        )
-        if len(daily_agg) >= 1:
-            current_date = daily_agg["time"].iloc[-1]
-
-            # Day perf (last close vs prior close)
-            if len(daily_agg) >= 2:
-                prev_close = daily_agg["period_close"].iloc[-2]
-                last_close = daily_agg["period_close"].iloc[-1]
-                if prev_close and not pd.isna(prev_close) and prev_close != 0:
-                    day_ret = (last_close / prev_close) - 1.0
-
-            dt_series = pd.to_datetime(daily_agg["time"])
-            curr_year = current_date.year
-            curr_month = current_date.month
-
-            y_mask = dt_series.dt.year == curr_year
-            y_subset = daily_agg.loc[y_mask].copy()
-            ytd_ret  = _period_return_open_to_close(y_subset)
-
-            m_mask = (dt_series.dt.year == curr_year) & (dt_series.dt.month == curr_month)
-            m_subset = daily_agg.loc[m_mask].copy()
-            mtd_ret  = _period_return_open_to_close(m_subset)
-
-            iso_all = dt_series.dt.isocalendar()
-            iso_year, iso_week, _ = pd.Timestamp(current_date).isocalendar()
-            w_mask = (iso_all["year"] == iso_year) & (iso_all["week"] == iso_week)
-            w_subset = daily_agg.loc[w_mask].copy()
-            wtd_ret  = _period_return_open_to_close(w_subset)
-except Exception as e:
-    st.warning(f"Could not load daily_es for performance tiles: {e}")
-
-# =========================
-# Title + top tiles
-# =========================
-st.title("Market Conditions")
-c_day, c_week, c_month, c_year = st.columns(4)
-_render_perf_tile(c_day,   "Day performance",   day_ret)
-_render_perf_tile(c_week,  "Week-to-date",      wtd_ret)
-_render_perf_tile(c_month, "Month-to-date",     mtd_ret)
-_render_perf_tile(c_year,  "Year-to-date",      ytd_ret)
+_perf_tile(c_day,   "Day performance",   day_ret)
+_perf_tile(c_week,  "Week-to-date",      wtd_ret)
+_perf_tile(c_month, "Month-to-date",     mtd_ret)
+_perf_tile(c_year,  "Year-to-date",      ytd_ret)
 
 # =========================
 # Controls
@@ -295,7 +162,7 @@ if mode == "As-of time snapshot":
     asof_time = st.time_input("As-of time (US/Eastern)", value=dt.time(3, 0))
 
 # =========================
-# Fetch (newest-first) + choose last N trade days
+# Fetch 30m data (DESC), compute trade_day (ET 18:00 roll)
 # =========================
 TABLE = "es_30m"
 rows_per_day_guess = 48
@@ -333,19 +200,21 @@ df["IB"]  = ((t >= dt.time(9,30)) & (t < dt.time(10,30)))
 df["RTH"] = ((t >= dt.time(9,30)) & (t <= dt.time(16,0)))
 
 per_day_last_bar = (
-    df.groupby("trade_day")["time_et"].max().sort_values(ascending=False)
+    df.groupby("trade_day")["time_et"]
+      .max()
+      .sort_values(ascending=False)
 )
 recent_trade_days_desc = per_day_last_bar.index[:int(trade_days_to_keep)]
 recent_mask = df["trade_day"].isin(set(recent_trade_days_desc))
 df = df[recent_mask].copy()
-df = df.sort_values(["trade_day","time_et"]).reset_index(drop=True)
+df = df.sort_values(["trade_day", "time_et"]).reset_index(drop=True)
 
-# Backfill latest day if early ON bars were clipped by DESC limit
+# Backfill earliest ON bars if needed
 latest_td = df["trade_day"].max()
 latest_day_df = df[df["trade_day"] == latest_td]
 if not latest_day_df.empty:
     earliest_bar_et = latest_day_df["time_et"].min()
-    latest_start_et = latest_td - pd.Timedelta(hours=6)  # 18:00 ET prior calendar day
+    latest_start_et = latest_td - pd.Timedelta(hours=6)
     latest_end_et   = latest_td + pd.Timedelta(hours=24)
 
     if earliest_bar_et > latest_start_et:
@@ -380,7 +249,7 @@ if not latest_day_df.empty:
                 df = pd.concat([df, missing_df], ignore_index=True)
                 df = df.sort_values(["trade_day","time_et"]).reset_index(drop=True)
 
-# Optional as-of cutoff
+# As-of cutoff (optional)
 if mode == "As-of time snapshot":
     cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
     cutoff_ts = df["trade_day"] + pd.to_timedelta(cut_seconds, unit="s")
@@ -388,22 +257,17 @@ if mode == "As-of time snapshot":
     mask_asof = (df["time_et"] >= prev_start) & (df["time_et"] <= cutoff_ts)
     df = df[mask_asof].copy()
 
-# Ensure session-level fields (prefer enriched later; fallback local)
-if "cum_vol" not in df.columns or df["cum_vol"].isna().all():
-    df["cum_vol"] = df.groupby("trade_day")["Volume"].cumsum()
+# Required columns
+for col in ["open","high","low","close","Volume"]:
+    if col not in df.columns:
+        st.error(f"Column '{col}' not found in {TABLE}.")
+        st.stop()
 
-if "session_high" not in df.columns or df["session_high"].isna().all():
-    df["session_high"] = df.groupby("trade_day")["high"].cummax()
-if "session_low" not in df.columns or df["session_low"].isna().all():
-    df["session_low"]  = df.groupby("trade_day")["low"].cummin()
-
-if "hi_op" not in df.columns or df["hi_op"].isna().all():
-    df["hi_op"]  = df["high"] - df["open"]
-if "op_lo" not in df.columns or df["op_lo"].isna().all():
-    df["op_lo"]  = df["open"] - df["low"]
-
-# Join es_30m_enriched if available
-enriched_cols = ["time","cum_vol","session_high","session_low","hi_op","op_lo","pHi","pLo","hi_phi","lo_plo"]
+# Enriched join (optional)
+enriched_cols = [
+    "time","cum_vol","session_high","session_low",
+    "hi_op","op_lo","pHi","pLo","hi_phi","lo_plo"
+]
 try:
     min_time = df["time"].min()
     max_time = df["time"].max()
@@ -424,18 +288,31 @@ try:
 except Exception as e:
     st.warning(f"Could not join es_30m_enriched; falling back to local calculations: {e}")
 
-# Fallback pHi/pLo from prior day extrema if needed
+# Ensure session-level fields exist
+if "cum_vol" not in df.columns or df["cum_vol"].isna().all():
+    df["cum_vol"] = df.groupby("trade_day")["Volume"].cumsum()
+if "session_high" not in df.columns or df["session_high"].isna().all():
+    df["session_high"] = df.groupby("trade_day")["high"].cummax()
+if "session_low" not in df.columns or df["session_low"].isna().all():
+    df["session_low"] = df.groupby("trade_day")["low"].cummin()
+if "hi_op" not in df.columns or df["hi_op"].isna().all():
+    df["hi_op"] = df["high"] - df["open"]
+if "op_lo" not in df.columns or df["op_lo"].isna().all():
+    df["op_lo"] = df["open"] - df["low"]
+
 if ("pHi" not in df.columns) or df["pHi"].isna().all() or \
    ("pLo" not in df.columns) or df["pLo"].isna().all():
     daily_hi_lo = (
         df.groupby("trade_day")
           .agg(day_high=("high","max"), day_low=("low","min"))
-          .reset_index()
-          .sort_values("trade_day")
+          .sort_index().reset_index()
     )
     daily_hi_lo["pHi_fallback"] = daily_hi_lo["day_high"].shift(1)
     daily_hi_lo["pLo_fallback"] = daily_hi_lo["day_low"].shift(1)
-    df = df.merge(daily_hi_lo[["trade_day","pHi_fallback","pLo_fallback"]], on="trade_day", how="left")
+    df = df.merge(
+        daily_hi_lo[["trade_day","pHi_fallback","pLo_fallback"]],
+        on="trade_day", how="left"
+    )
     if "pHi" not in df.columns:
         df["pHi"] = df["pHi_fallback"]
     else:
@@ -446,26 +323,21 @@ if ("pHi" not in df.columns) or df["pHi"].isna().all() or \
         df["pLo"] = df["pLo"].where(df["pLo"].notna(), df["pLo_fallback"])
     df = df.drop(columns=[c for c in ["pHi_fallback","pLo_fallback"] if c in df.columns])
 
-# hi_pHi / lo_pLo if missing
 if "hi_phi" in df.columns and df["hi_phi"].notna().any():
-    df["hi_pHi"] = df.get("hi_pHi", df["hi_phi"])
+    df["hi_pHi"] = df.get("hi_pHi", pd.Series(index=df.index, dtype=float))
     df["hi_pHi"] = df["hi_pHi"].where(df["hi_pHi"].notna(), df["hi_phi"])
 else:
-    if "hi_pHi" not in df.columns:
-        df["hi_pHi"] = df["high"] - df["pHi"]
-    else:
-        mask = df["hi_pHi"].isna()
-        df.loc[mask, "hi_pHi"] = df.loc[mask, "high"] - df.loc[mask, "pHi"]
+    df["hi_pHi"] = df.get("hi_pHi", pd.Series(index=df.index, dtype=float))
+    mask = df["hi_pHi"].isna()
+    df.loc[mask, "hi_pHi"] = df.loc[mask, "high"] - df.loc[mask, "pHi"]
 
 if "lo_plo" in df.columns and df["lo_plo"].notna().any():
-    df["lo_pLo"] = df.get("lo_pLo", df["lo_plo"])
+    df["lo_pLo"] = df.get("lo_pLo", pd.Series(index=df.index, dtype=float))
     df["lo_pLo"] = df["lo_pLo"].where(df["lo_pLo"].notna(), df["lo_plo"])
 else:
-    if "lo_pLo" not in df.columns:
-        df["lo_pLo"] = df["low"] - df["pLo"]
-    else:
-        mask = df["lo_pLo"].isna()
-        df.loc[mask, "lo_pLo"] = df.loc[mask, "low"] - df.loc[mask, "pLo"]
+    df["lo_pLo"] = df.get("lo_pLo", pd.Series(index=df.index, dtype=float))
+    mask = df["lo_pLo"].isna()
+    df.loc[mask, "lo_pLo"] = df.loc[mask, "low"] - df.loc[mask, "pLo"]
 
 # =========================
 # Aggregate per trade_day
@@ -492,6 +364,7 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
         session_low_at_cutoff=("session_low","last"),
         cum_vol_at_cutoff=("cum_vol","last"),
     )
+
     out = (first_last.join(hilo).join(bars).join(perbar).join(lasts)).reset_index().sort_values("trade_day")
     out["day_range"]  = out["day_high"] - out["day_low"]
     out["trade_date"] = out["trade_day"].dt.date
@@ -499,17 +372,17 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
 
 daily = agg_daily(df)
 
-# Trailing comparisons
-for col in ["day_range","day_volume","avg_hi_op","avg_op_lo"]:
+for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
     if col in daily.columns:
         avg_col = f"{col}_tw_avg"
         pct_col = f"{col}_pct_vs_tw"
         daily[avg_col] = trailing_mean(daily[col], trailing_window)
-        daily[pct_col] = np.where(daily[avg_col].abs() > 0, (daily[col] - daily[avg_col]) / daily[avg_col], np.nan)
+        daily[pct_col] = np.where(
+            daily[avg_col].abs() > 0,
+            (daily[col] - daily[avg_col]) / daily[avg_col],
+            np.nan,
+        )
 
-# =========================
-# Assert latest trade_day presence
-# =========================
 if latest_trade_day_expected not in daily["trade_day"].values:
     st.warning(
         "Latest trade day derived from the raw table is missing after filters.\n"
@@ -559,10 +432,156 @@ st.caption(
     "(full-day or as-of), so comparisons are apples-to-apples."
 )
 
-# ======================================================
-# NEW: Full-width overlay range bar directly below tiles
-# ======================================================
-# Pull prior RTH range from es_trade_day_summary (quoted cols with spaces)
+# =========================
+# MA SNAPSHOT (directly under tiles; keep as-is)
+# =========================
+def _render_ma_cards(container, ma_rows):
+    if not ma_rows:
+        container.info("No moving average columns found in es_30m.")
+        return
+
+    container.markdown("**MA snapshot**")
+    # 5 across in one line responsively
+    c1, c2, c3, c4, c5 = container.columns(5)
+    cols = [c1, c2, c3, c4, c5]
+
+    for i, ma in enumerate(ma_rows):
+        label = ma["label"]
+        val = ma["value"]
+        dist = ma["dist"]
+        if pd.isna(val) or pd.isna(dist):
+            text = "N/A"
+            bg = "#E5E7EB"
+        else:
+            text = f"{val:.2f} ({dist:+.1f} pts)"
+            if dist > 0:
+                bg = "#BBF7D0"  # green-200 (price above MA)
+            elif dist < 0:
+                bg = "#FECACA"  # red-200 (price below MA)
+            else:
+                bg = "#E5E7EB"
+
+        html = f"""
+            <div style="background-color:{bg};
+                        border:1px solid #D1D5DB;
+                        border-radius:10px;
+                        padding:10px 12px;
+                        margin-bottom:6px;">
+                <div style="font-size:0.8rem; color:#4B5563; margin-bottom:2px;">
+                    {label}
+                </div>
+                <div style="font-size:1rem; font-weight:600; color:#111827;">
+                    {text}
+                </div>
+            </div>
+        """
+        cols[i % 5].markdown(html, unsafe_allow_html=True)
+
+# Build MA data from the last bar of latest day
+ma_rows = []
+try:
+    latest_bars = df[df["trade_day"] == latest_td]
+    if not latest_bars.empty:
+        last_bar = latest_bars.iloc[-1]
+        price = last_bar.get("close", np.nan)
+        ma_candidates = ["5MA", "10MA", "20MA", "50MA", "200MA"]
+        ma_cols = [c for c in ma_candidates if c in df.columns]
+        for col_name in ma_cols:
+            val = last_bar.get(col_name, np.nan)
+            dist = (price - val) if (pd.notna(price) and pd.notna(val)) else np.nan
+            ma_rows.append({"label": col_name, "value": val, "dist": dist})
+except Exception as e:
+    st.warning(f"Could not compute MA context: {e}")
+
+_render_ma_cards(st.container(), ma_rows)
+
+# =========================
+# CURRENT RANGE vs PRIOR RTH (directly under MA snapshot)
+# =========================
+def _render_range_position_bar(container, current_price, prev_rth_low, prev_rth_high,
+                               session_low, session_high):
+    # collect values for scale
+    vals = [v for v in [current_price, prev_rth_low, prev_rth_high, session_low, session_high] if pd.notna(v)]
+    if len(vals) < 3:
+        container.info("Not enough data for range visualization.")
+        return
+
+    # small gutters so labels aren’t clipped
+    scale_min = min(vals)
+    scale_max = max(vals)
+    pad = (scale_max - scale_min) * 0.01 if scale_max > scale_min else 1.0
+    scale_min -= pad
+    scale_max += pad
+    span = max(1e-9, (scale_max - scale_min))
+
+    def pct(x: float) -> float:
+        return 100.0 * (x - scale_min) / span
+
+    prior_left = pct(prev_rth_low)
+    prior_right = pct(prev_rth_high)
+    prior_width = max(0.5, prior_right - prior_left)
+
+    sess_left = pct(session_low)
+    sess_right = pct(session_high)
+    sess_width = max(0.5, sess_right - sess_left)
+
+    last_pct = pct(current_price)
+
+    html = f"""
+<div style="margin-top:12px;"></div>
+<div style="font-weight:600; margin-bottom:6px;">Current range vs prior RTH range</div>
+
+<div style="position:relative; width:100%; height:80px; border-radius:12px;
+            background-color:#FFFFFF; border:1px solid #E5E7EB; overflow:visible;">
+
+  <!-- Base track -->
+  <div style="position:absolute; left:0; right:0; top:36px; height:12px;
+              background-color:#EEF2F7; border-radius:999px;"></div>
+
+  <!-- Prior RTH hollow rectangle -->
+  <div style="position:absolute; top:30px; height:24px; left:{prior_left:.2f}%;
+              width:{prior_width:.2f}%; border-radius:12px; border:2px solid #9CA3AF;
+              background-color:transparent;"></div>
+
+  <!-- Current session filled pill (darker blue) -->
+  <div style="position:absolute; top:36px; height:12px; left:{sess_left:.2f}%;
+              width:{sess_width:.2f}%; border-radius:999px; background-color:#1D4ED8;"></div>
+
+  <!-- Last price marker -->
+  <div title="Last" style="position:absolute; top:26px; bottom:26px; left:{last_pct:.2f}%;
+                           display:flex; align-items:center;">
+    <div style="width:2px; height:100%; background-color:#111827;"></div>
+  </div>
+
+  <!-- Prior labels (top row, inside) -->
+  <div style="position:absolute; top:6px; left:{prior_left:.2f}%;
+              transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
+    {prev_rth_low:.2f} <span style="opacity:0.8;">pLo</span>
+  </div>
+  <div style="position:absolute; top:6px; left:{prior_right:.2f}%;
+              transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
+    {prev_rth_high:.2f} <span style="opacity:0.8;">pHi</span>
+  </div>
+
+  <!-- Session labels (bottom row, inside) -->
+  <div style="position:absolute; bottom:6px; left:{sess_left:.2f}%;
+              transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
+    {session_low:.2f} <span style="opacity:0.8;">Lo</span>
+  </div>
+  <div style="position:absolute; bottom:6px; left:{sess_right:.2f}%;
+              transform:translateX(-50%); font-size:0.75rem; color:#374151; white-space:nowrap;">
+    {session_high:.2f} <span style="opacity:0.8;">Hi</span>
+  </div>
+</div>
+"""
+    container.markdown(html, unsafe_allow_html=True)
+
+# Values for bar
+current_close = row.get("day_close", np.nan)
+session_low_cutoff = row.get("session_low_at_cutoff", np.nan)
+session_high_cutoff = row.get("session_high_at_cutoff", np.nan)
+
+# Prior RTH range (quoted col names with spaces)
 prev_rth_low = prev_rth_high = np.nan
 try:
     summ_resp = (
@@ -587,43 +606,24 @@ try:
 except Exception as e:
     st.warning(f"Could not load es_trade_day_summary for prior RTH range: {e}")
 
-current_close = row.get("day_close", np.nan)
-session_low_cutoff = row.get("session_low_at_cutoff", np.nan)
-session_high_cutoff = row.get("session_high_at_cutoff", np.nan)
-
-# Full-width bar (no columns -> stretches across screen)
-_render_range_position_bar_fullwidth(
-    st, current_close, prev_rth_low, prev_rth_high, session_low_cutoff, session_high_cutoff
+# Render the bar full-width right under the MA snapshot
+_render_range_position_bar(
+    st.container(),
+    current_close,
+    prev_rth_low,
+    prev_rth_high,
+    session_low_cutoff,
+    session_high_cutoff,
 )
 
-# ======================================================
-# MA snapshot (one horizontal row)
-# ======================================================
-ma_rows = []
-try:
-    latest_bars = df[df["trade_day"] == latest_td]
-    if not latest_bars.empty:
-        last_bar = latest_bars.iloc[-1]
-        price = last_bar.get("close", np.nan)
-        ma_candidates = ["5MA","10MA","20MA","50MA","200MA"]
-        ma_cols = [c for c in ma_candidates if c in df.columns]
-        for col_name in ma_cols:
-            val = last_bar.get(col_name, np.nan)
-            dist = (price - val) if (pd.notna(price) and pd.notna(val)) else np.nan
-            ma_rows.append({"label": col_name, "value": val, "dist": dist})
-except Exception as e:
-    st.warning(f"Could not compute MA context: {e}")
-
-_render_ma_row(st, ma_rows)
-
 # =========================
-# Table (last N trade days) – trimmed columns
+# Table (last N trade days)
 # =========================
 st.markdown("### Conditions vs Trailing (last N trade days)")
 max_slider = int(min(120, trade_days_to_keep, len(daily)))
 show_days = st.slider("Show last N trade days", 10, max_slider, min(30, max_slider), 5)
 
-# Build only the columns you want to keep
+# Remove the pMid hit %, hi/pHi, lo/pLo, Bars per your earlier request
 cols = [
     "trade_date",
     "day_open","day_high","day_low","day_close","day_range",
@@ -631,10 +631,7 @@ cols = [
     "cum_vol_at_cutoff","day_volume","day_volume_tw_avg",
     "avg_hi_op","avg_hi_op_tw_avg","avg_hi_op_pct_vs_tw",
     "avg_op_lo","avg_op_lo_tw_avg","avg_op_lo_pct_vs_tw",
-    # Removed: avg_hi_pHi, avg_hi_pHi_tw_avg, avg_lo_pLo, avg_lo_pLo_tw_avg,
-    #          ON/IB/RTH % pMid Hit and their 10d avgs, Bars
 ]
-
 existing = [c for c in cols if c in daily.columns]
 tbl = daily[existing].tail(int(show_days)).copy()
 
@@ -642,7 +639,8 @@ labels = {
     "trade_date":"Trade Date",
     "day_open":"Open","day_high":"High","day_low":"Low","day_close":"Close","day_range":"Range",
     "session_high_at_cutoff":"Session High (cutoff)","session_low_at_cutoff":"Session Low (cutoff)",
-    "cum_vol_at_cutoff":"Cum Vol (cutoff)","day_volume":"Vol (day)","day_volume_tw_avg":f"Vol {trailing_window}d",
+    "cum_vol_at_cutoff":"Cum Vol (cutoff)",
+    "day_volume":"Vol (day)","day_volume_tw_avg":f"Vol {trailing_window}d",
     "avg_hi_op":"Avg(Hi-Op)","avg_hi_op_tw_avg":f"Avg(Hi-Op) {trailing_window}d","avg_hi_op_pct_vs_tw":f"Avg(Hi-Op) vs {trailing_window}d",
     "avg_op_lo":"Avg(Op-Lo)","avg_op_lo_tw_avg":f"Avg(Op-Lo) {trailing_window}d","avg_op_lo_pct_vs_tw":f"Avg(Op-Lo) vs {trailing_window}d",
 }
