@@ -33,9 +33,12 @@ def trailing_mean(s: pd.Series, n: int) -> pd.Series:
     return s.rolling(int(n)).mean().shift(1)
 
 # =========================
-# Title
+# Title + top tiles
 # =========================
 st.title("Market Conditions")
+
+# (1) Performance tiles
+c_day, c_week, c_month, c_year = st.columns(4)
 
 def _perf_tile(container, label: str, ret: float):
     if pd.isna(ret):
@@ -66,11 +69,10 @@ def _perf_tile(container, label: str, ret: float):
     """
     container.markdown(html, unsafe_allow_html=True)
 
-# =========================
-# Preload daily data for YTD/MTD/WTD anchors (no tiles yet)
-# =========================
+# Preload performance tile data
+day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
 daily_agg = None
-perf_df = pd.DataFrame()
+
 try:
     perf_resp = (
         sb.table("daily_es")
@@ -87,18 +89,69 @@ try:
             daily_agg = (
                 perf_df.groupby("time")
                        .agg(period_open=("open","first"), period_close=("close","last"))
-                       .reset_index()
-                       .sort_values("time")
+                       .reset_index().sort_values("time")
             )
-except Exception:
-    pass  # suppress per your request
+            if len(daily_agg) >= 1:
+                current_date = daily_agg["time"].iloc[-1]
+
+                # === UPDATED DAY CALC: last intraday price (es_30m) vs yesterday's close (daily_es) ===
+                try:
+                    lp_resp = (
+                        sb.table("es_30m")
+                          .select("time, close")
+                          .order("time", desc=True)
+                          .limit(400)
+                          .execute()
+                    )
+                    lp_df = pd.DataFrame(lp_resp.data)
+                    if not lp_df.empty and {"time","close"}.issubset(lp_df.columns):
+                        lp_df["time"] = pd.to_datetime(lp_df["time"], utc=True, errors="coerce")
+                        time_et = lp_df["time"].dt.tz_convert("US/Eastern")
+
+                        # compute trade_day with 18:00 ET roll
+                        midnight = time_et.dt.floor("D")
+                        roll = (time_et.dt.hour >= 18).astype("int64")
+                        td = midnight + pd.to_timedelta(roll, unit="D")
+
+                        latest_td = td.iloc[0]  # latest row due to desc order
+                        # last available price within that latest trade_day
+                        last_price = lp_df.loc[td == latest_td, "close"].iloc[0]
+
+                        # 'yesterday' = last daily_es date strictly before this trade_day's date
+                        da = daily_agg.copy()
+                        da["time"] = pd.to_datetime(da["time"]).dt.date
+                        prev_mask = da["time"] < latest_td.date()
+                        if prev_mask.any() and pd.notna(last_price):
+                            prev_close = da.loc[prev_mask, "period_close"].iloc[-1]
+                            if pd.notna(prev_close) and prev_close != 0:
+                                day_ret = (last_price / prev_close) - 1.0
+                except Exception:
+                    pass  # keep silent per your existing pattern
+
+                # Unchanged: YTD / MTD / WTD from daily_es, anchored to current_date
+                dt_series = pd.to_datetime(daily_agg["time"])
+                y_mask = dt_series.dt.year == current_date.year
+                ytd_ret = _period_return_open_to_close(daily_agg.loc[y_mask].copy())
+                m_mask = (dt_series.dt.year == current_date.year) & (dt_series.dt.month == current_date.month)
+                mtd_ret = _period_return_open_to_close(daily_agg.loc[m_mask].copy())
+                iso_all = dt_series.dt.isocalendar()
+                curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
+                w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
+                wtd_ret = _period_return_open_to_close(daily_agg.loc[w_mask].copy())
+except Exception as e:
+    pass  # suppress tile warnings per your request
+
+_perf_tile(c_day,   "Day performance",   day_ret)
+_perf_tile(c_week,  "Week-to-date",      wtd_ret)
+_perf_tile(c_month, "Month-to-date",     mtd_ret)
+_perf_tile(c_year,  "Year-to-date",      ytd_ret)
 
 # -------- PLACEHOLDERS so visuals render ABOVE the filters --------
 ma_placeholder = st.container()      # (2) MA snapshot here
 range_placeholder = st.container()   # (3) Current vs prior RTH range here
 
 # =========================
-# Controls (state inputs)
+# Controls (state inputs) — keep for logic, but visuals render above via placeholders
 # =========================
 c1, c2, c3, c4, c5 = st.columns([1,1,1,1,1.3])
 with c1:
@@ -262,7 +315,7 @@ else:
         df["hi_pHi"] = df["high"] - df["pHi"]
     else:
         mask = df["hi_pHi"].isna()
-        df.loc[mask, "hi_pHi"] = df.loc[mask, "high"] - df.loc[mask, "pHi"]
+        df.loc[mask, "hi_pHi"] = df.loc[mask, "high"] - df["pHi"]
 
 if "lo_plo" in df.columns and df["lo_plo"].notna().any():
     if "lo_pLo" not in df.columns:
@@ -328,72 +381,6 @@ for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_l
 latest_td = daily["trade_day"].max()
 row = daily.loc[daily["trade_day"] == latest_td].iloc[0]
 
-# =========================
-# UPDATED: Performance tiles (render AFTER intraday DF)
-# Day = last intraday price vs YESTERDAY'S close
-# =========================
-# Last available price from intraday (respects As-of cutoff)
-last_price = (
-    df.loc[df["trade_day"] == latest_td, "close"].iloc[-1]
-    if (not df.empty and (df["trade_day"] == latest_td).any())
-    else np.nan
-)
-
-current_trade_date = row["trade_date"]
-day_ret = np.nan
-wtd_ret = mtd_ret = ytd_ret = np.nan
-
-# Ensure we have daily_agg (from daily_es); rebuild if needed
-if daily_agg is None and not perf_df.empty:
-    tmp = perf_df.copy()
-    tmp["time"] = pd.to_datetime(tmp["time"]).dt.date
-    daily_agg = (
-        tmp.dropna(subset=["time","open","close"])
-           .groupby("time")
-           .agg(period_open=("open","first"), period_close=("close","last"))
-           .reset_index()
-           .sort_values("time")
-    )
-
-if (daily_agg is not None) and (not daily_agg.empty):
-    da = daily_agg.copy()
-    da["time"] = pd.to_datetime(da["time"]).dt.date
-
-    # Yesterday = last calendar day strictly before current_trade_date in daily_es
-    prev_mask = da["time"] < current_trade_date
-    if prev_mask.any() and pd.notna(last_price):
-        prev_close = da.loc[prev_mask, "period_close"].iloc[-1]
-        if pd.notna(prev_close) and prev_close != 0:
-            day_ret = (last_price / prev_close) - 1.0
-
-    # YTD / MTD / WTD anchored to the same current_trade_date
-    dt_series = pd.to_datetime(da["time"])
-    curr_date = pd.Timestamp(current_trade_date)
-
-    # YTD
-    y_mask = dt_series.dt.year == curr_date.year
-    ytd_ret = _period_return_open_to_close(da.loc[y_mask].copy())
-
-    # MTD
-    m_mask = (dt_series.dt.year == curr_date.year) & (dt_series.dt.month == curr_date.month)
-    mtd_ret = _period_return_open_to_close(da.loc[m_mask].copy())
-
-    # WTD (ISO)
-    iso_all = dt_series.dt.isocalendar()
-    curr_iso_year, curr_iso_week, _ = curr_date.isocalendar()
-    w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
-    wtd_ret = _period_return_open_to_close(da.loc[w_mask].copy())
-
-# Render tiles here (top of page section)
-c_day, c_week, c_month, c_year = st.columns(4)
-_perf_tile(c_day,   "Day performance",   day_ret)
-_perf_tile(c_week,  "Week-to-date",      wtd_ret)
-_perf_tile(c_month, "Month-to-date",     mtd_ret)
-_perf_tile(c_year,  "Year-to-date",      ytd_ret)
-
-# =========================
-# Header below tiles
-# =========================
 hdr = f"{symbol} — {'As-of ' + asof_time.strftime('%H:%M ET') if asof_time else 'Full day'}"
 st.subheader(hdr)
 
