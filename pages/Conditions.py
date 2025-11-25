@@ -37,79 +37,58 @@ def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
 
 day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
 daily_agg = None
-y_subset = m_subset = w_subset = None  # (kept for clarity, not shown)
 
 try:
-    # IMPORTANT: get the MOST RECENT rows, then sort ascending in pandas
     perf_resp = (
         sb.table("daily_es")
           .select("time, open, close")
-          .order("time", desc=True)  # newest -> oldest in DB
-          .limit(260)                # most recent ~260 rows
+          .order("time", desc=True)
+          .limit(260)
           .execute()
     )
     perf_df = pd.DataFrame(perf_resp.data)
 
-    if not perf_df.empty:
-        if not {"time", "open", "close"}.issubset(perf_df.columns):
-            st.warning(
-                "Expected columns 'time', 'open', 'close' in `daily_es` for performance tiles. "
-                f"Columns available: {list(perf_df.columns)}"
+    if not perf_df.empty and {"time","open","close"}.issubset(perf_df.columns):
+        perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
+        perf_df = perf_df.dropna(subset=["time","open","close"])
+        if not perf_df.empty:
+            daily_agg = (
+                perf_df.groupby("time")
+                       .agg(period_open=("open","first"),
+                            period_close=("close","last"))
+                       .reset_index()
+                       .sort_values("time")
             )
-        else:
-            # Convert to date and aggregate; now these are the most recent dates
-            perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
-            perf_df = perf_df.dropna(subset=["time", "open", "close"])
+            if len(daily_agg) >= 1:
+                current_date = daily_agg["time"].iloc[-1]
 
-            if not perf_df.empty:
-                daily_agg = (
-                    perf_df
-                    .groupby("time")
-                    .agg(
-                        period_open=("open", "first"),
-                        period_close=("close", "last"),
-                    )
-                    .reset_index()
-                    .sort_values("time")   # oldest -> newest of the most recent 260 days
-                )
+                # Day perf: latest close vs prior close
+                if len(daily_agg) >= 2:
+                    last_two = daily_agg.tail(2)
+                    prev_close = last_two["period_close"].iloc[0]
+                    last_close = last_two["period_close"].iloc[1]
+                    day_ret = (last_close / prev_close) - 1.0 if prev_close else np.nan
 
-                if len(daily_agg) >= 1:
-                    # Latest date in the table (true latest because we just sorted ascending)
-                    current_date = daily_agg["time"].iloc[-1]
+                dt_series = pd.to_datetime(daily_agg["time"])
 
-                    # --- Day performance: latest close vs previous day's close ---
-                    if len(daily_agg) >= 2:
-                        last_two = daily_agg.tail(2)
-                        prev_close = last_two["period_close"].iloc[0]
-                        last_close = last_two["period_close"].iloc[1]
-                        if prev_close and not pd.isna(prev_close) and prev_close != 0:
-                            day_ret = (last_close / prev_close) - 1.0
-                        else:
-                            day_ret = np.nan
-                    else:
-                        day_ret = np.nan  # only 1 day
+                # YTD: latest close vs FIRST OPEN of calendar year
+                current_year = current_date.year
+                y_mask = dt_series.dt.year == current_year
+                y_subset = daily_agg.loc[y_mask].copy()
+                ytd_ret = _period_return_open_to_close(y_subset)
 
-                    # Prepare datetime series for filters
-                    dt_series = pd.to_datetime(daily_agg["time"])
+                # MTD
+                current_month = current_date.month
+                m_mask = (dt_series.dt.year == current_year) & (dt_series.dt.month == current_month)
+                m_subset = daily_agg.loc[m_mask].copy()
+                mtd_ret = _period_return_open_to_close(m_subset)
 
-                    # === YTD: latest close vs first OPEN of the calendar year ===
-                    current_year = current_date.year
-                    y_mask = dt_series.dt.year == current_year
-                    y_subset = daily_agg.loc[y_mask].copy()
-                    ytd_ret = _period_return_open_to_close(y_subset)
-
-                    # === MTD: latest close vs first OPEN of the calendar month ===
-                    current_month = current_date.month
-                    m_mask = (dt_series.dt.year == current_year) & (dt_series.dt.month == current_month)
-                    m_subset = daily_agg.loc[m_mask].copy()
-                    mtd_ret = _period_return_open_to_close(m_subset)
-
-                    # === WTD (ISO week): latest close vs first OPEN of the ISO week ===
-                    iso_all = dt_series.dt.isocalendar()
-                    curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
-                    w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
-                    w_subset = daily_agg.loc[w_mask].copy()
-                    wtd_ret = _period_return_open_to_close(w_subset)
+                # WTD (ISO)
+                iso_all = dt_series.dt.isocalendar()
+                curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
+                w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
+                w_subset = daily_agg.loc[w_mask].copy()
+                wtd_ret = _period_return_open_to_close(w_subset)
 except Exception as e:
     st.warning(f"Could not load daily_es for performance tiles: {e}")
 
@@ -164,7 +143,6 @@ def _perf_tile(container, label: str, ret: float):
             </div>
         </div>
     """
-
     container.markdown(html, unsafe_allow_html=True)
 
 _perf_tile(c_day,   "Day performance",   day_ret)
@@ -195,14 +173,13 @@ if mode == "As-of time snapshot":
 # Fetch (newest-first) + choose last N trade days like main App
 # =========================
 TABLE = "es_30m"  # base price table
-
 rows_per_day_guess = 48  # 30m bars
 rows_to_load = int(max(2000, trade_days_to_keep * rows_per_day_guess * 1.5))
 
 response = (
     sb.table(TABLE)
       .select("*")
-      .order("time", desc=True)   # newest first (matches your main App)
+      .order("time", desc=True)
       .limit(rows_to_load)
       .execute()
 )
@@ -215,7 +192,6 @@ if df.empty:
 df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
 df["time_et"] = df["time"].dt.tz_convert("US/Eastern")
 
-# Keep these BEFORE any filtering so they reflect the raw latest
 latest_bar_time = df["time_et"].max()
 latest_trade_day_expected = (
     latest_bar_time.floor("D") + pd.to_timedelta(int(latest_bar_time.hour >= 18), unit="D")
@@ -224,16 +200,16 @@ latest_trade_day_expected = (
 et = df["time_et"]
 midnight = et.dt.floor("D")
 roll = (et.dt.hour >= 18).astype("int64")
-df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")  # tz-aware midnight ET of trade-date
+df["trade_day"] = midnight + pd.to_timedelta(roll, unit="D")
 df["trade_date"] = df["trade_day"].dt.date
 
-# --- Create session flags (needed later for pMid stats) ---
+# --- Create session flags ---
 t = df["time_et"].dt.time
 df["ON"]  = ((t >= dt.time(18,0)) | (t < dt.time(9,30)))
 df["IB"]  = ((t >= dt.time(9,30)) & (t < dt.time(10,30)))
 df["RTH"] = ((t >= dt.time(9,30)) & (t <= dt.time(16,0)))
 
-# --- Pick the most recent N trade days by latest bar timestamp (DESC), then sort ASC for display ---
+# --- Pick the most recent N trade days (DESC) then sort ASC ---
 per_day_last_bar = (
     df.groupby("trade_day")["time_et"]
       .max()
@@ -242,24 +218,15 @@ per_day_last_bar = (
 recent_trade_days_desc = per_day_last_bar.index[:int(trade_days_to_keep)]
 recent_mask = df["trade_day"].isin(set(recent_trade_days_desc))
 df = df[recent_mask].copy()
+df = df.sort_values(["trade_day","time_et"]).reset_index(drop=True)
 
-# Sort oldest->newest for downstream grouping / tables (like your App)
-df = df.sort_values(["trade_day", "time_et"]).reset_index(drop=True)
-
-# =========================
-# Backfill: ensure the latest trade_day has ALL bars from 18:00 ET
-# (prevents wrong lows/highs/cum-vol when DESC limit clipped early ON bars)
-# =========================
+# --- Backfill latest trade_day from 18:00 ET if DESC limit clipped early ON bars ---
 latest_td = df["trade_day"].max()
 latest_day_df = df[df["trade_day"] == latest_td]
 if not latest_day_df.empty:
     earliest_bar_et = latest_day_df["time_et"].min()
-
-    # Start of session = previous calendar day 18:00 ET = trade_day - 6h
-    latest_start_et = latest_td - pd.Timedelta(hours=6)     # 18:00 ET of prior calendar day
-    latest_end_et   = latest_td + pd.Timedelta(hours=24)    # generous cap
-
-    # If first bar we have begins after 18:00 ET, fetch the missing early bars
+    latest_start_et = latest_td - pd.Timedelta(hours=6)  # 18:00 ET prior calendar day
+    latest_end_et   = latest_td + pd.Timedelta(hours=24)
     if earliest_bar_et > latest_start_et:
         start_iso = latest_start_et.tz_convert("UTC").isoformat()
         end_iso   = latest_end_et.tz_convert("UTC").isoformat()
@@ -275,30 +242,21 @@ if not latest_day_df.empty:
         if not missing_df.empty:
             missing_df["time"] = pd.to_datetime(missing_df["time"], utc=True, errors="coerce")
             missing_df["time_et"] = missing_df["time"].dt.tz_convert("US/Eastern")
-
             et2 = missing_df["time_et"]
             midnight2 = et2.dt.floor("D")
             roll2 = (et2.dt.hour >= 18).astype("int64")
             missing_df["trade_day"] = midnight2 + pd.to_timedelta(roll2, unit="D")
             missing_df["trade_date"] = missing_df["trade_day"].dt.date
-
-            # add the flags we use later
             tt = missing_df["time_et"].dt.time
             missing_df["ON"]  = ((tt >= dt.time(18,0)) | (tt < dt.time(9,30)))
             missing_df["IB"]  = ((tt >= dt.time(9,30)) & (tt < dt.time(10,30)))
             missing_df["RTH"] = ((tt >= dt.time(9,30)) & (tt <= dt.time(16,0)))
-
-            # keep only rows that aren't already present
             missing_df = missing_df[~missing_df["time"].isin(df["time"])]
             if not missing_df.empty:
                 df = pd.concat([df, missing_df], ignore_index=True)
                 df = df.sort_values(["trade_day","time_et"]).reset_index(drop=True)
 
-# =========================
-# Optional: As-of cutoff filtering (trade_day aware)
-# Keeps bars: (trade_day-1 @ 18:00) → (trade_day @ HH:MM) for EVERY trade_day
-# So prior days are also truncated at the same intraday cutoff -> apples-to-apples.
-# =========================
+# --- Optional: As-of cutoff (trade_day aware) ---
 if mode == "As-of time snapshot":
     cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
     cutoff_ts = df["trade_day"] + pd.to_timedelta(cut_seconds, unit="s")
@@ -307,27 +265,18 @@ if mode == "As-of time snapshot":
     df = df[mask_asof].copy()
 
 # --- Required columns guard ---
-for col in ["open", "high", "low", "close", "Volume"]:
+for col in ["open","high","low","close","Volume"]:
     if col not in df.columns:
         st.error(f"Column '{col}' not found in {TABLE}.")
         st.stop()
 
 # =========================
-# Join enriched 30m data for session-level features
+# Join enriched 30m for session-level features
 # =========================
 enriched_cols = [
-    "time",
-    "cum_vol",
-    "session_high",
-    "session_low",
-    "hi_op",
-    "op_lo",
-    "pHi",
-    "pLo",
-    "hi_phi",
-    "lo_plo",
+    "time", "cum_vol", "session_high", "session_low",
+    "hi_op", "op_lo", "pHi", "pLo", "hi_phi", "lo_plo",
 ]
-
 try:
     min_time = df["time"].min()
     max_time = df["time"].max()
@@ -343,35 +292,24 @@ try:
         if not enr_df.empty:
             enr_df["time"] = pd.to_datetime(enr_df["time"], utc=True, errors="coerce")
             enr_df = enr_df.dropna(subset=["time"])
-            enr_df = (
-                enr_df.sort_values("time")
-                      .drop_duplicates(subset=["time"], keep="last")
-            )
+            enr_df = enr_df.sort_values("time").drop_duplicates(subset=["time"], keep="last")
             df = df.merge(enr_df, on="time", how="left", suffixes=("", "_enriched"))
 except Exception as e:
     st.warning(f"Could not join es_30m_enriched; falling back to local calculations: {e}")
 
-# =========================
 # Ensure session-level fields exist (prefer enriched, fallback to local)
-# =========================
-
-# cum_vol
 if "cum_vol" not in df.columns or df["cum_vol"].isna().all():
     df["cum_vol"] = df.groupby("trade_day")["Volume"].cumsum()
-
-# session_high / session_low
 if "session_high" not in df.columns or df["session_high"].isna().all():
     df["session_high"] = df.groupby("trade_day")["high"].cummax()
 if "session_low" not in df.columns or df["session_low"].isna().all():
     df["session_low"]  = df.groupby("trade_day")["low"].cummin()
-
-# hi_op / op_lo
 if "hi_op" not in df.columns or df["hi_op"].isna().all():
-    df["hi_op"]  = df["high"] - df["open"]
+    df["hi_op"] = df["high"] - df["open"]
 if "op_lo" not in df.columns or df["op_lo"].isna().all():
-    df["op_lo"]  = df["open"] - df["low"]
+    df["op_lo"] = df["open"] - df["low"]
 
-# pHi / pLo – prefer enriched, fallback to prior-day extrema
+# pHi / pLo fallback using prior-day extrema
 if ("pHi" not in df.columns) or df["pHi"].isna().all() or \
    ("pLo" not in df.columns) or df["pLo"].isna().all():
     daily_hi_lo = (
@@ -422,71 +360,52 @@ else:
         mask = df["lo_pLo"].isna()
         df.loc[mask, "lo_pLo"] = df.loc[mask, "low"] - df["pLo"]
 
-# Helper: trailing mean (shifted to avoid look-ahead)
 def trailing_mean(s: pd.Series, n: int) -> pd.Series:
     return s.rolling(int(n)).mean().shift(1)
 
 # =========================
-# Aggregate per trade_day (respects current filter/as-of)
+# Aggregate per trade_day
 # =========================
 def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
-    # Basic opens/closes
     first_last = scope.groupby("trade_day").agg(
         day_open=("open","first"),
         day_close=("close","last"),
     )
-
-    # Highs/Lows/Volume
     hilo = scope.groupby("trade_day").agg(
         day_high=("high","max"),
         day_low=("low","min"),
         day_volume=("Volume","sum"),
     )
     bars = scope.groupby("trade_day").size().rename("bars_in_day")
-
-    # Per-bar averages
     perbar = scope.groupby("trade_day").agg(
         avg_hi_op=("hi_op","mean"),
         avg_op_lo=("op_lo","mean"),
         avg_hi_pHi=("hi_pHi","mean"),
         avg_lo_pLo=("lo_pLo","mean"),
     )
-
-    # Last values at the current cutoff
     lasts = scope.groupby("trade_day").agg(
         session_high_at_cutoff=("session_high","last"),
         session_low_at_cutoff=("session_low","last"),
         cum_vol_at_cutoff=("cum_vol","last"),
     )
-
-    out = (
-        first_last.join(hilo)
-                  .join(bars)
-                  .join(perbar)
-                  .join(lasts)
-                  .reset_index()
-                  .sort_values("trade_day")
-    )
+    out = (first_last.join(hilo).join(bars).join(perbar).join(lasts)).reset_index().sort_values("trade_day")
     out["day_range"]  = out["day_high"] - out["day_low"]
     out["trade_date"] = out["trade_day"].dt.date
     return out
 
 daily = agg_daily(df)
 
-# Trailing comparisons (apples-to-apples because scope already respects Full/As-of mode)
 for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_lo_pLo"]:
     if col in daily.columns:
         avg_col = f"{col}_tw_avg"
         pct_col = f"{col}_pct_vs_tw"
         daily[avg_col] = trailing_mean(daily[col], trailing_window)
-        # guard against divide-by-zero so you don't see crazy values when avg ~ 0
         daily[pct_col] = np.where(
             daily[avg_col].abs() > 0,
             (daily[col] - daily[avg_col]) / daily[avg_col],
             np.nan,
         )
 
-# % pMid hit by session (prev-bar midpoint within the session)
 def session_pmid_percent(scope: pd.DataFrame, label: str) -> pd.DataFrame:
     if label not in scope.columns:
         return pd.DataFrame(columns=["trade_day", f"{label}_pMid_hit_pct"])
@@ -520,12 +439,15 @@ for ses in ["ON","IB","RTH"]:
         avg_col = f"{col}_tw_avg"
         pct_col = f"{col}_pct_vs_tw"
         daily[avg_col] = trailing_mean(daily[col], trailing_window)
-        # For hit pct, pct_vs_tw is a difference (not ratio) so you see +/- absolute change
         daily[pct_col] = daily[col] - daily[avg_col]
 
 # =========================
 # Assert latest trade_day presence
 # =========================
+if daily.empty:
+    st.warning("No trade days after processing—adjust controls.")
+    st.stop()
+
 if latest_trade_day_expected not in daily["trade_day"].values:
     st.warning(
         "Latest trade day derived from the raw table is missing after filters.\n"
@@ -533,10 +455,6 @@ if latest_trade_day_expected not in daily["trade_day"].values:
         f"Expected trade_day (ET midnight): {latest_trade_day_expected}\n"
         "Tip: widen 'Load last N calendar days', increase 'Trade days to keep', or adjust As-of cutoff."
     )
-
-if daily.empty:
-    st.warning("No trade days after processing—adjust controls.")
-    st.stop()
 
 # =========================
 # KPI (latest day)
@@ -576,113 +494,120 @@ st.caption(
 )
 
 # ======================================================
-# Range vs prior RTH (Option A) + Moving averages cards
+# Overlay Range Bar (Example 1) + MA snapshot (cards)
 # ======================================================
-st.markdown("### Intraday Context: Prior RTH Range & Moving Averages")
+st.markdown("### Current range vs prior RTH range")
 
 col_range, col_ma_cards = st.columns([2, 2])
 
-# ----- helper: range position bar (prior hollow + current overlay) -----
-def _render_range_position_bar(container, current_price, prev_rth_low, prev_rth_high,
+def _render_range_position_bar(container, last_px, prev_rth_low, prev_rth_high,
                                session_low, session_high):
-    # Need enough data to build a sensible scale
-    vals = [current_price, prev_rth_low, prev_rth_high, session_low, session_high]
-    vals = [v for v in vals if pd.notna(v)]
+    """
+    HTML/CSS overlay:
+      - Hollow gray = prior RTH range
+      - Blue filled = current session range
+      - Black rule = last price
+      - Labels INSIDE the viz (top/bottom), with scale padding to avoid clipping
+    """
+    vals = [v for v in [last_px, prev_rth_low, prev_rth_high, session_low, session_high] if pd.notna(v)]
     if len(vals) < 3:
         container.info("Not enough data for range visualization.")
         return
 
-    scale_min = min(vals)
-    scale_max = max(vals)
-    if scale_max <= scale_min:
+    base_min = min(vals)
+    base_max = max(vals)
+    if base_max <= base_min:
         container.info("Invalid range for visualization.")
         return
 
-    scale_span = scale_max - scale_min
+    span = base_max - base_min
+    pad = max(2.0, 0.02 * span)          # scale padding (2 pts or 2%)
+    scale_min = base_min - pad
+    scale_max = base_max + pad
+    scale_span = max(1e-9, scale_max - scale_min)
 
-    def to_pct(x):
+    def pct(x):
+        x = min(max(x, scale_min), scale_max)   # clamp
         return 100.0 * (x - scale_min) / scale_span
 
-    # Prior RTH rect
-    prior_left = to_pct(prev_rth_low)
-    prior_right = to_pct(prev_rth_high)
-    prior_width = max(1.0, prior_right - prior_left)
+    # positions
+    prior_left  = pct(prev_rth_low)
+    prior_right = pct(prev_rth_high)
+    prior_width = max(0.2, prior_right - prior_left)
 
-    # Current session range
-    sess_left = to_pct(session_low)
-    sess_right = to_pct(session_high)
-    sess_width = max(1.0, sess_right - sess_left)
+    sess_left   = pct(session_low)
+    sess_right  = pct(session_high)
+    sess_width  = max(0.2, sess_right - sess_left)
 
-    # Last price marker
-    last_pct = to_pct(current_price)
+    last_pos    = pct(last_px)
 
+    # Build HTML
     html = f"""
-        <div style="font-size:0.9rem; margin-bottom:4px;">
-            Current vs prior RTH range
-        </div>
+    <div style="position:relative;
+                width:100%;
+                height:90px;
+                margin-top:6px;
+                margin-bottom:4px;
+                border-radius:10px;
+                background-color:#F9FAFB;
+                border:1px solid #E5E7EB;
+                overflow:visible;">
 
-        <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#4B5563;">
-            <span>Prior RTH Low: {prev_rth_low:.2f}</span>
-            <span>Prior RTH High: {prev_rth_high:.2f}</span>
-        </div>
+      <!-- base track -->
+      <div style="position:absolute; left:2%; right:2%; top:40px; height:12px;
+                  background-color:#EEF2FF; border-radius:999px; z-index:1;"></div>
 
-        <div style="position:relative; height:70px; margin-top:4px;">
+      <!-- prior RTH hollow -->
+      <div title="Prior RTH"
+           style="position:absolute; top:34px; height:24px;
+                  left:{prior_left:.2f}%; width:{prior_width:.2f}%;
+                  border-radius:10px; border:2px solid #9CA3AF;
+                  background:transparent; z-index:3;"></div>
 
-            <!-- Base track -->
-            <div style="
-                position:absolute;
-                left:0;
-                right:0;
-                top:26px;
-                height:14px;
-                background-color:#F3F4F6;
-                border-radius:999px;
-            "></div>
+      <!-- current session filled -->
+      <div title="Current Session"
+           style="position:absolute; top:40px; height:12px;
+                  left:{sess_left:.2f}%; width:{sess_width:.2f}%;
+                  border-radius:999px; background-color:#BFDBFE; z-index:4;"></div>
 
-            <!-- Prior RTH hollow rectangle -->
-            <div style="
-                position:absolute;
-                top:22px;
-                height:22px;
-                left:{prior_left:.1f}%;
-                width:{prior_width:.1f}%;
-                border-radius:12px;
-                border:2px solid #9CA3AF;
-                background-color:rgba(0,0,0,0);
-            "></div>
+      <!-- last price -->
+      <div title="Last"
+           style="position:absolute; top:26px; bottom:26px;
+                  left:{last_pos:.2f}%; width:2px;
+                  background-color:#111827; z-index:5;"></div>
 
-            <!-- Current session filled bar -->
-            <div style="
-                position:absolute;
-                top:26px;
-                height:14px;
-                left:{sess_left:.1f}%;
-                width:{sess_width:.1f}%;
-                border-radius:999px;
-                background-color:#BFDBFE;
-            "></div>
+      <!-- labels: prior low/high (top) -->
+      <div style="position:absolute; left:{prior_left:.2f}%; top:8px;
+                  transform:translateX(-50%); font-size:0.75rem; color:#374151; z-index:6;">
+          <div style="text-align:center;"><strong>{prev_rth_low:.2f}</strong></div>
+          <div style="text-align:center;">pLo</div>
+      </div>
+      <div style="position:absolute; left:{prior_right:.2f}%; top:8px;
+                  transform:translateX(-50%); font-size:0.75rem; color:#374151; z-index:6;">
+          <div style="text-align:center;"><strong>{prev_rth_high:.2f}</strong></div>
+          <div style="text-align:center;">pHi</div>
+      </div>
 
-            <!-- Last price marker -->
-            <div style="
-                position:absolute;
-                top:18px;
-                bottom:26px;
-                left:{last_pct:.1f}%;
-                width:2px;
-                background-color:#111827;
-            "></div>
-        </div>
-
-        <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#4B5563; margin-top:4px;">
-            <span>Session Low: {session_low:.2f}</span>
-            <span>Last: {current_price:.2f}</span>
-            <span>Session High: {session_high:.2f}</span>
-        </div>
+      <!-- labels: session low/high (bottom) + last -->
+      <div style="position:absolute; left:{sess_left:.2f}%; bottom:6px;
+                  transform:translateX(-50%); font-size:0.75rem; color:#374151; z-index:6;">
+          <div style="text-align:center;"><strong>{session_low:.2f}</strong></div>
+          <div style="text-align:center;">Sess Lo</div>
+      </div>
+      <div style="position:absolute; left:{last_pos:.2f}%; bottom:6px;
+                  transform:translateX(-50%); font-size:0.75rem; color:#111827; z-index:6;">
+          <div style="text-align:center;"><strong>{last_px:.2f}</strong></div>
+          <div style="text-align:center;">Last</div>
+      </div>
+      <div style="position:absolute; left:{sess_right:.2f}%; bottom:6px;
+                  transform:translateX(-50%); font-size:0.75rem; color:#374151; z-index:6;">
+          <div style="text-align:center;"><strong>{session_high:.2f}</strong></div>
+          <div style="text-align:center;">Sess Hi</div>
+      </div>
+    </div>
     """
-
     container.markdown(html, unsafe_allow_html=True)
 
-# ----- helper: MA cards -----
 def _render_ma_cards(container, ma_rows):
     if not ma_rows:
         container.info("No moving average columns found in es_30m.")
@@ -702,9 +627,9 @@ def _render_ma_cards(container, ma_rows):
         else:
             text = f"{val:.2f} ({dist:+.1f} pts)"
             if dist > 0:
-                bg = "#BBF7D0"  # green-200 (price above MA)
+                bg = "#BBF7D0"  # price above MA
             elif dist < 0:
-                bg = "#FECACA"  # red-200 (price below MA)
+                bg = "#FECACA"  # price below MA
             else:
                 bg = "#E5E7EB"
 
@@ -724,12 +649,12 @@ def _render_ma_cards(container, ma_rows):
         """
         cols[i % 2].markdown(html, unsafe_allow_html=True)
 
-# ----- build data needed for these visuals -----
-current_close = row.get("day_close", np.nan)
-session_low_cutoff = row.get("session_low_at_cutoff", np.nan)
+# Build inputs for the range bar
+current_close       = row.get("day_close", np.nan)
+session_low_cutoff  = row.get("session_low_at_cutoff", np.nan)
 session_high_cutoff = row.get("session_high_at_cutoff", np.nan)
 
-# Prior RTH range (from es_trade_day_summary with quoted column names)
+# Prior RTH range from summary (quoted names with spaces)
 prev_rth_low = prev_rth_high = np.nan
 try:
     summ_resp = (
@@ -749,11 +674,12 @@ try:
             prev_row = summ_df.loc[prev_mask].sort_values("trade_date").iloc[-1]
         else:
             prev_row = summ_df.sort_values("trade_date").iloc[-1]
-        prev_rth_low = prev_row.get("RTH Lo", np.nan)
+        prev_rth_low  = prev_row.get("RTH Lo", np.nan)
         prev_rth_high = prev_row.get("RTH Hi", np.nan)
 except Exception as e:
     st.warning(f"Could not load es_trade_day_summary for prior RTH range: {e}")
 
+# Render overlay bar
 _render_range_position_bar(
     col_range,
     current_close,
@@ -763,24 +689,18 @@ _render_range_position_bar(
     session_high_cutoff,
 )
 
-# Moving averages for the latest bar of the latest trade_day
+# MA cards (latest bar of latest trade day)
 ma_rows = []
 try:
     latest_bars = df[df["trade_day"] == latest_td]
     if not latest_bars.empty:
         last_bar = latest_bars.iloc[-1]
         price = last_bar.get("close", np.nan)
-
-        ma_candidates = ["5MA", "10MA", "20MA", "50MA", "200MA"]
-        ma_cols = [c for c in ma_candidates if c in df.columns]
-
-        for col_name in ma_cols:
-            val = last_bar.get(col_name, np.nan)
-            dist = np.nan
-            if pd.notna(price) and pd.notna(val):
-                dist = price - val
-            ma_rows.append({"label": col_name, "value": val, "dist": dist})
-
+        for col_name in ["5MA","10MA","20MA","50MA","200MA"]:
+            if col_name in df.columns:
+                val = last_bar.get(col_name, np.nan)
+                dist = price - val if (pd.notna(price) and pd.notna(val)) else np.nan
+                ma_rows.append({"label": col_name, "value": val, "dist": dist})
 except Exception as e:
     st.warning(f"Could not compute MA context: {e}")
 
@@ -826,7 +746,6 @@ labels = {
 }
 tbl = tbl.rename(columns=labels)
 
-# Formatting
 fmt = {}
 for name in tbl.columns:
     if name == "Trade Date":
