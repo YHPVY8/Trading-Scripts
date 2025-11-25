@@ -32,6 +32,11 @@ def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
 def trailing_mean(s: pd.Series, n: int) -> pd.Series:
     return s.rolling(int(n)).mean().shift(1)
 
+# Fixed config (replaces removed filters)
+SYMBOL = "ES"
+TRAILING_WINDOW = 10
+TRADE_DAYS_TO_KEEP = 180
+
 # =========================
 # Title + top tiles
 # =========================
@@ -94,7 +99,7 @@ try:
             if len(daily_agg) >= 1:
                 current_date = daily_agg["time"].iloc[-1]
 
-                # === UPDATED DAY CALC: last intraday price (es_30m) vs yesterday's close (daily_es) ===
+                # === DAY (unchanged layout): last intraday price (es_30m) vs yesterday's daily close ===
                 try:
                     lp_resp = (
                         sb.table("es_30m")
@@ -108,16 +113,13 @@ try:
                         lp_df["time"] = pd.to_datetime(lp_df["time"], utc=True, errors="coerce")
                         time_et = lp_df["time"].dt.tz_convert("US/Eastern")
 
-                        # compute trade_day with 18:00 ET roll
                         midnight = time_et.dt.floor("D")
                         roll = (time_et.dt.hour >= 18).astype("int64")
                         td = midnight + pd.to_timedelta(roll, unit="D")
 
-                        latest_td = td.iloc[0]  # latest row due to desc order
-                        # last available price within that latest trade_day
+                        latest_td = td.iloc[0]  # latest due to desc order
                         last_price = lp_df.loc[td == latest_td, "close"].iloc[0]
 
-                        # 'yesterday' = last daily_es date strictly before this trade_day's date
                         da = daily_agg.copy()
                         da["time"] = pd.to_datetime(da["time"]).dt.date
                         prev_mask = da["time"] < latest_td.date()
@@ -125,20 +127,33 @@ try:
                             prev_close = da.loc[prev_mask, "period_close"].iloc[-1]
                             if pd.notna(prev_close) and prev_close != 0:
                                 day_ret = (last_price / prev_close) - 1.0
-                except Exception:
-                    pass  # keep silent per your existing pattern
 
-                # Unchanged: YTD / MTD / WTD from daily_es, anchored to current_date
-                dt_series = pd.to_datetime(daily_agg["time"])
-                y_mask = dt_series.dt.year == current_date.year
-                ytd_ret = _period_return_open_to_close(daily_agg.loc[y_mask].copy())
-                m_mask = (dt_series.dt.year == current_date.year) & (dt_series.dt.month == current_date.month)
-                mtd_ret = _period_return_open_to_close(daily_agg.loc[m_mask].copy())
-                iso_all = dt_series.dt.isocalendar()
-                curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
-                w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
-                wtd_ret = _period_return_open_to_close(daily_agg.loc[w_mask].copy())
-except Exception as e:
+                        # === WTD / MTD / YTD: period OPEN vs the SAME last_price ===
+                        dt_series = pd.to_datetime(da["time"])
+                        curr_date = pd.Timestamp(latest_td.date())
+
+                        # YTD
+                        y_mask = dt_series.dt.year == curr_date.year
+                        if y_mask.any():
+                            y_open = da.loc[y_mask, "period_open"].iloc[0]
+                            ytd_ret = (last_price / y_open) - 1.0 if (pd.notna(y_open) and y_open != 0) else np.nan
+
+                        # MTD
+                        m_mask = (dt_series.dt.year == curr_date.year) & (dt_series.dt.month == curr_date.month)
+                        if m_mask.any():
+                            m_open = da.loc[m_mask, "period_open"].iloc[0]
+                            mtd_ret = (last_price / m_open) - 1.0 if (pd.notna(m_open) and m_open != 0) else np.nan
+
+                        # WTD (ISO week)
+                        iso_all = dt_series.dt.isocalendar()
+                        curr_iso_year, curr_iso_week, _ = curr_date.isocalendar()
+                        w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
+                        if w_mask.any():
+                            w_open = da.loc[w_mask, "period_open"].iloc[0]
+                            wtd_ret = (last_price / w_open) - 1.0 if (pd.notna(w_open) and w_open != 0) else np.nan
+                except Exception:
+                    pass  # silent per your pattern
+except Exception:
     pass  # suppress tile warnings per your request
 
 _perf_tile(c_day,   "Day performance",   day_ret)
@@ -151,30 +166,11 @@ ma_placeholder = st.container()      # (2) MA snapshot here
 range_placeholder = st.container()   # (3) Current vs prior RTH range here
 
 # =========================
-# Controls (state inputs) — keep for logic, but visuals render above via placeholders
-# =========================
-c1, c2, c3, c4, c5 = st.columns([1,1,1,1,1.3])
-with c1:
-    symbol = st.text_input("Symbol", value="ES")
-with c2:
-    lookback_days = st.number_input("Load last N calendar days", 30, 3650, 240, 30)
-with c3:
-    trailing_window = st.number_input("Trailing window (days)", 5, 60, 10, 1)
-with c4:
-    mode = st.selectbox("View mode", ["Full day", "As-of time snapshot"])
-with c5:
-    trade_days_to_keep = st.number_input("Trade days to keep (most recent)", 10, 3650, 180, 10)
-
-asof_time = None
-if mode == "As-of time snapshot":
-    asof_time = st.time_input("As-of time (US/Eastern)", value=dt.time(3, 0))
-
-# =========================
 # Fetch (newest-first) + choose last N trade days
 # =========================
 TABLE = "es_30m"
 rows_per_day_guess = 48
-rows_to_load = int(max(2000, trade_days_to_keep * rows_per_day_guess * 1.5))
+rows_to_load = int(max(2000, TRADE_DAYS_TO_KEEP * rows_per_day_guess * 1.5))
 
 response = (
     sb.table(TABLE)
@@ -215,18 +211,10 @@ per_day_last_bar = (
       .max()
       .sort_values(ascending=False)
 )
-recent_trade_days_desc = per_day_last_bar.index[:int(trade_days_to_keep)]
+recent_trade_days_desc = per_day_last_bar.index[:int(TRADE_DAYS_TO_KEEP)]
 recent_mask = df["trade_day"].isin(set(recent_trade_days_desc))
 df = df[recent_mask].copy()
 df = df.sort_values(["trade_day", "time_et"]).reset_index(drop=True)
-
-# --- As-of cutoff (optional) ---
-if mode == "As-of time snapshot":
-    cut_seconds = asof_time.hour*3600 + asof_time.minute*60 + asof_time.second
-    cutoff_ts = df["trade_day"] + pd.to_timedelta(cut_seconds, unit="s")
-    prev_start = (df["trade_day"] - pd.Timedelta(days=1)) + pd.Timedelta(hours=18)
-    mask_asof = (df["time_et"] >= prev_start) & (df["time_et"] <= cutoff_ts)
-    df = df[mask_asof].copy()
 
 # --- Required columns guard ---
 for col in ["open", "high", "low", "close", "Volume"]:
@@ -368,7 +356,7 @@ for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_l
     if col in daily.columns:
         avg_col = f"{col}_tw_avg"
         pct_col = f"{col}_pct_vs_tw"
-        daily[avg_col] = trailing_mean(daily[col], trailing_window)
+        daily[avg_col] = trailing_mean(daily[col], TRAILING_WINDOW)
         daily[pct_col] = np.where(
             daily[avg_col].abs() > 0,
             (daily[col] - daily[avg_col]) / daily[avg_col],
@@ -381,17 +369,17 @@ for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_l
 latest_td = daily["trade_day"].max()
 row = daily.loc[daily["trade_day"] == latest_td].iloc[0]
 
-hdr = f"{symbol} — {'As-of ' + asof_time.strftime('%H:%M ET') if asof_time else 'Full day'}"
+hdr = f"{SYMBOL} — Full day"
 st.subheader(hdr)
 
 k1, k2, k3, k4 = st.columns(4)
 k1.metric(
-    f"Range vs {trailing_window}d",
+    f"Range vs {TRAILING_WINDOW}d",
     f"{row.get('day_range', np.nan):.2f}" if pd.notna(row.get('day_range')) else "—",
     None if pd.isna(row.get('day_range_pct_vs_tw')) else f"{row['day_range_pct_vs_tw']*100:+.1f}%"
 )
 k2.metric(
-    f"Cum Vol vs {trailing_window}d",
+    f"Cum Vol vs {TRAILING_WINDOW}d",
     f"{row.get('cum_vol_at_cutoff', np.nan):,.0f}" if pd.notna(row.get('cum_vol_at_cutoff')) else "—",
     None
 )
@@ -576,7 +564,7 @@ with range_placeholder:
 # Conditions vs Trailing table (trimmed)
 # =========================
 st.markdown("### Conditions vs Trailing (last N trade days)")
-max_slider = int(min(120, trade_days_to_keep, len(daily)))
+max_slider = int(min(120, TRADE_DAYS_TO_KEEP, len(daily)))
 show_days = st.slider("Show last N trade days", 10, max_slider, min(30, max_slider), 5)
 
 cols = [
@@ -596,9 +584,9 @@ labels = {
     "session_high_at_cutoff":"Session High (cutoff)",
     "session_low_at_cutoff":"Session Low (cutoff)",
     "cum_vol_at_cutoff":"Cum Vol (cutoff)",
-    "day_volume":"Vol (day)","day_volume_tw_avg":f"Vol {trailing_window}d",
-    "avg_hi_op":"Avg(Hi-Op)","avg_hi_op_tw_avg":f"Avg(Hi-Op) {trailing_window}d","avg_hi_op_pct_vs_tw":f"Avg(Hi-Op) vs {trailing_window}d",
-    "avg_op_lo":"Avg(Op-Lo)","avg_op_lo_tw_avg":f"Avg(Op-Lo) {trailing_window}d","avg_op_lo_pct_vs_tw":f"Avg(Op-Lo) vs {trailing_window}d",
+    "day_volume":"Vol (day)","day_volume_tw_avg":f"Vol {TRAILING_WINDOW}d",
+    "avg_hi_op":"Avg(Hi-Op)","avg_hi_op_tw_avg":f"Avg(Hi-Op) {TRAILING_WINDOW}d","avg_hi_op_pct_vs_tw":f"Avg(Hi-Op) vs {TRAILING_WINDOW}d",
+    "avg_op_lo":"Avg(Op-Lo)","avg_op_lo_tw_avg":f"Avg(Op-Lo) {TRAILING_WINDOW}d","avg_op_lo_pct_vs_tw":f"Avg(Op-Lo) vs {TRAILING_WINDOW}d",
 }
 tbl = tbl.rename(columns=labels)
 
