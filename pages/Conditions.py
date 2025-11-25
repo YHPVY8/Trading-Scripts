@@ -18,7 +18,7 @@ SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # =========================
-# Daily performance snapshot from daily_es
+# Helpers
 # =========================
 def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
     if sub_df is None or sub_df.empty:
@@ -29,62 +29,15 @@ def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
         return np.nan
     return (last_close / first_open) - 1.0
 
-day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
-daily_agg = None
-
-try:
-    perf_resp = (
-        sb.table("daily_es")
-          .select("time, open, close")
-          .order("time", desc=True)
-          .limit(260)
-          .execute()
-    )
-    perf_df = pd.DataFrame(perf_resp.data)
-
-    if not perf_df.empty and {"time", "open", "close"}.issubset(perf_df.columns):
-        perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
-        perf_df = perf_df.dropna(subset=["time", "open", "close"])
-
-        if not perf_df.empty:
-            daily_agg = (
-                perf_df.groupby("time")
-                       .agg(period_open=("open", "first"),
-                            period_close=("close", "last"))
-                       .reset_index()
-                       .sort_values("time")
-            )
-
-            if len(daily_agg) >= 1:
-                current_date = daily_agg["time"].iloc[-1]
-
-                # Day performance vs prior close
-                if len(daily_agg) >= 2:
-                    last_two = daily_agg.tail(2)
-                    prev_close = last_two["period_close"].iloc[0]
-                    last_close = last_two["period_close"].iloc[1]
-                    day_ret = (last_close / prev_close) - 1.0 if prev_close else np.nan
-
-                dt_series = pd.to_datetime(daily_agg["time"])
-                # YTD
-                y_mask = dt_series.dt.year == current_date.year
-                ytd_ret = _period_return_open_to_close(daily_agg.loc[y_mask].copy())
-                # MTD
-                m_mask = (dt_series.dt.year == current_date.year) & (dt_series.dt.month == current_date.month)
-                mtd_ret = _period_return_open_to_close(daily_agg.loc[m_mask].copy())
-                # WTD (ISO)
-                iso_all = dt_series.dt.isocalendar()
-                curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
-                w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
-                wtd_ret = _period_return_open_to_close(daily_agg.loc[w_mask].copy())
-except Exception as e:
-    st.warning(f"Could not load daily_es for performance tiles: {e}")
+def trailing_mean(s: pd.Series, n: int) -> pd.Series:
+    return s.rolling(int(n)).mean().shift(1)
 
 # =========================
 # Title + top tiles
 # =========================
 st.title("Market Conditions")
 
+# (1) Performance tiles
 c_day, c_week, c_month, c_year = st.columns(4)
 
 def _perf_tile(container, label: str, ret: float):
@@ -116,13 +69,58 @@ def _perf_tile(container, label: str, ret: float):
     """
     container.markdown(html, unsafe_allow_html=True)
 
+# Preload performance tile data
+day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
+daily_agg = None
+
+try:
+    perf_resp = (
+        sb.table("daily_es")
+          .select("time, open, close")
+          .order("time", desc=True)
+          .limit(260)
+          .execute()
+    )
+    perf_df = pd.DataFrame(perf_resp.data)
+    if not perf_df.empty and {"time","open","close"}.issubset(perf_df.columns):
+        perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
+        perf_df = perf_df.dropna(subset=["time","open","close"])
+        if not perf_df.empty:
+            daily_agg = (
+                perf_df.groupby("time")
+                       .agg(period_open=("open","first"), period_close=("close","last"))
+                       .reset_index().sort_values("time")
+            )
+            if len(daily_agg) >= 1:
+                current_date = daily_agg["time"].iloc[-1]
+                if len(daily_agg) >= 2:
+                    last_two = daily_agg.tail(2)
+                    prev_close = last_two["period_close"].iloc[0]
+                    last_close = last_two["period_close"].iloc[1]
+                    day_ret = (last_close / prev_close) - 1.0 if prev_close else np.nan
+                dt_series = pd.to_datetime(daily_agg["time"])
+                y_mask = dt_series.dt.year == current_date.year
+                ytd_ret = _period_return_open_to_close(daily_agg.loc[y_mask].copy())
+                m_mask = (dt_series.dt.year == current_date.year) & (dt_series.dt.month == current_date.month)
+                mtd_ret = _period_return_open_to_close(daily_agg.loc[m_mask].copy())
+                iso_all = dt_series.dt.isocalendar()
+                curr_iso_year, curr_iso_week, _ = pd.Timestamp(current_date).isocalendar()
+                w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
+                wtd_ret = _period_return_open_to_close(daily_agg.loc[w_mask].copy())
+except Exception as e:
+    pass  # suppress tile warnings per your request
+
 _perf_tile(c_day,   "Day performance",   day_ret)
 _perf_tile(c_week,  "Week-to-date",      wtd_ret)
 _perf_tile(c_month, "Month-to-date",     mtd_ret)
 _perf_tile(c_year,  "Year-to-date",      ytd_ret)
 
+# -------- PLACEHOLDERS so visuals render ABOVE the filters --------
+ma_placeholder = st.container()      # (2) MA snapshot here
+range_placeholder = st.container()   # (3) Current vs prior RTH range here
+
 # =========================
-# Controls (we’ll move visuals ABOVE these)
+# Controls (state inputs) — keep for logic, but visuals render above via placeholders
 # =========================
 c1, c2, c3, c4, c5 = st.columns([1,1,1,1,1.3])
 with c1:
@@ -230,8 +228,8 @@ try:
             enr_df = enr_df.dropna(subset=["time"])
             enr_df = enr_df.sort_values("time").drop_duplicates(subset=["time"], keep="last")
             df = df.merge(enr_df, on="time", how="left", suffixes=("", "_enriched"))
-except Exception as e:
-    st.warning(f"Could not join es_30m_enriched; falling back to local calculations: {e}")
+except Exception:
+    pass  # suppress warnings per your request
 
 # =========================
 # Ensure session-level fields exist (fallbacks)
@@ -299,10 +297,6 @@ else:
     else:
         mask = df["lo_pLo"].isna()
         df.loc[mask, "lo_pLo"] = df.loc[mask, "low"] - df["pLo"]
-
-# Helper
-def trailing_mean(s: pd.Series, n: int) -> pd.Series:
-    return s.rolling(int(n)).mean().shift(1)
 
 # =========================
 # Aggregate per trade_day
@@ -376,14 +370,13 @@ k4.metric("Session Low (cutoff)",
           f"{row.get('session_low_at_cutoff',  np.nan):.2f}" if pd.notna(row.get('session_low_at_cutoff'))  else "—")
 
 # ======================================================
-# MA snapshot (ONE ROW, directly under tiles)
+# (2) MA snapshot — ONE ROW, directly under tiles (via placeholder)
 # ======================================================
 def _render_ma_cards_horizontal(container, ma_rows):
     """Render MA cards in a single horizontal row."""
     if not ma_rows:
         container.info("No moving average columns found in es_30m.")
         return
-    # 5 standard MAs -> 5 columns
     cols = container.columns(len(ma_rows))
     for i, ma in enumerate(ma_rows):
         label = ma["label"]
@@ -412,8 +405,7 @@ def _render_ma_cards_horizontal(container, ma_rows):
         """
         cols[i].markdown(html, unsafe_allow_html=True)
 
-st.markdown("### MA snapshot")
-# latest bar of latest trade_day
+# Build MA rows
 ma_rows = []
 try:
     latest_bars = df[df["trade_day"] == latest_td]
@@ -425,44 +417,16 @@ try:
                 val = last_bar.get(col_name, np.nan)
                 dist = (price - val) if (pd.notna(price) and pd.notna(val)) else np.nan
                 ma_rows.append({"label": col_name, "value": val, "dist": dist})
-except Exception as e:
-    st.warning(f"Could not compute MA context: {e}")
+except Exception:
+    pass
 
-_render_ma_cards_horizontal(st, ma_rows)
+with ma_placeholder:
+    st.markdown("### MA snapshot")
+    _render_ma_cards_horizontal(st, ma_rows)
 
 # ======================================================
-# Current range vs prior RTH range (with side buffer)
+# (3) Current range vs prior RTH range — EXACT working snippet, under MA snapshot
 # ======================================================
-st.markdown("### Current range vs prior RTH range")
-
-# Gather values
-current_close       = row.get("day_close", np.nan)
-session_low_cutoff  = row.get("session_low_at_cutoff", np.nan)
-session_high_cutoff = row.get("session_high_at_cutoff", np.nan)
-
-# Pull prior RTH (quoted columns)
-prev_rth_low = prev_rth_high = np.nan
-try:
-    summ_resp = (
-        sb.table("es_trade_day_summary")
-          .select('trade_date,"RTH Hi","RTH Lo"')
-          .lte("trade_date", row["trade_date"].isoformat())
-          .order("trade_date", desc=True)
-          .limit(10)
-          .execute()
-    )
-    summ_df = pd.DataFrame(summ_resp.data)
-    if not summ_df.empty:
-        summ_df["trade_date"] = pd.to_datetime(summ_df["trade_date"]).dt.date
-        latest_date = row["trade_date"]
-        prev_mask = summ_df["trade_date"] < latest_date
-        prev_row = (summ_df.loc[prev_mask].sort_values("trade_date").iloc[-1]
-                    if prev_mask.any() else summ_df.sort_values("trade_date").iloc[-1])
-        prev_rth_low = prev_row.get("RTH Lo", np.nan)
-        prev_rth_high = prev_row.get("RTH Hi", np.nan)
-except Exception as e:
-    st.warning(f"Could not load es_trade_day_summary for prior RTH range: {e}")
-
 def _render_range_position_bar(container, current_price, prev_low, prev_high,
                                sess_low, sess_high):
     # Validate
@@ -544,13 +508,41 @@ def _render_range_position_bar(container, current_price, prev_low, prev_high,
     """
     container.markdown(html, unsafe_allow_html=True)
 
-_render_range_position_bar(
-    st, current_close, prev_rth_low, prev_rth_high, session_low_cutoff, session_high_cutoff
-)
+# Pull inputs for the bar
+current_close       = row.get("day_close", np.nan)
+session_low_cutoff  = row.get("session_low_at_cutoff", np.nan)
+session_high_cutoff = row.get("session_high_at_cutoff", np.nan)
+
+prev_rth_low = prev_rth_high = np.nan
+try:
+    summ_resp = (
+        sb.table("es_trade_day_summary")
+          .select('trade_date,"RTH Hi","RTH Lo"')
+          .lte("trade_date", row["trade_date"].isoformat())
+          .order("trade_date", desc=True)
+          .limit(10)
+          .execute()
+    )
+    summ_df = pd.DataFrame(summ_resp.data)
+    if not summ_df.empty:
+        summ_df["trade_date"] = pd.to_datetime(summ_df["trade_date"]).dt.date
+        latest_date = row["trade_date"]
+        prev_mask = summ_df["trade_date"] < latest_date
+        prev_row = (summ_df.loc[prev_mask].sort_values("trade_date").iloc[-1]
+                    if prev_mask.any() else summ_df.sort_values("trade_date").iloc[-1])
+        prev_rth_low = prev_row.get("RTH Lo", np.nan)
+        prev_rth_high = prev_row.get("RTH Hi", np.nan)
+except Exception:
+    pass
+
+with range_placeholder:
+    st.markdown("### Current range vs prior RTH range")
+    _render_range_position_bar(
+        st, current_close, prev_rth_low, prev_rth_high, session_low_cutoff, session_high_cutoff
+    )
 
 # =========================
-# Conditions vs Trailing table
-# (trim the columns per your request)
+# Conditions vs Trailing table (trimmed)
 # =========================
 st.markdown("### Conditions vs Trailing (last N trade days)")
 max_slider = int(min(120, trade_days_to_keep, len(daily)))
