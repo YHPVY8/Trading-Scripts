@@ -79,26 +79,33 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 # --- EURO IB: metrics + tidy order (uses es_eur_ib_summary snake_case) ---
+# --- EURO IB: metrics + tidy order (uses es_eur_ib_summary) ---
 if choice == "Euro IB":
     df = euro_ib_filter_and_metrics(df)
     if df.empty:
         st.info("No rows for Euro IB after filtering.")
         st.stop()
 
-    # Desired display order for es_eur_ib_summary (snake_case)
+    # Drop legacy equality columns if they snuck through
+    drop_eq = [c for c in df.columns if c.lower().strip() in {"eur_ibh=hi","eur_ibl=lo"}]
+    if drop_eq:
+        df = df.drop(columns=drop_eq)
+
+    # Prefer the “break” columns up front
     desired_order = [
         "trade_date", "day", "symbol",
-        "eibh_break", "eibl_break", "eib_break_both",
-        "eibh12_hit", "eibl12_hit",
-        "eibh15_hit", "eibl15_hit",
-        "eibh20_hit", "eibl20_hit",
-        "eur_ibh_rth_hit", "eur_ibl_rth_hit",
+        "eIBH Break", "eIBL Break", "eIB_Break_Both",
+        "EUR_IBH1.2_Hit", "EUR_IBL1.2_Hit",
+        "EUR_IBH1.5_Hit", "EUR_IBL1.5_Hit",
+        "EUR_IBH2_Hit",   "EUR_IBL2_Hit",
+        "EUR_IBH_RTH_Hit","EUR_IBL_RTH_Hit",
     ]
     df = df[[c for c in desired_order if c in df.columns] + [c for c in df.columns if c not in desired_order]]
 
     # Reformat trade_date to string (if present) after filtering
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
 
 # --- SPX Opening Range: filter + order columns (run once, here) ---
 if choice == "SPX Opening Range":
