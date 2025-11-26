@@ -11,6 +11,8 @@ from views_extras import render_current_levels
 
 # NEW: SPX helper (filters DF + shows metrics; keeps generic styling)
 from views_extras import spx_opening_range_filter_and_metrics
+from views_extras import render_current_levels, spx_opening_range_filter_and_metrics, euro_ib_filter_and_metrics
+
 
 
 # ---- CONFIG ----
@@ -77,6 +79,28 @@ if "date" in df.columns:
 if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+# --- EURO IB: show metrics + (optional) order columns ---
+if choice == "Euro IB":
+    df = euro_ib_filter_and_metrics(df)
+    if df.empty:
+        st.info("No rows for Euro IB after filtering.")
+        st.stop()
+
+    # Optional: place common columns first if they exist
+    desired_order = [
+        "trade_date", "day", "symbol",
+        "eIBH Break", "eIBL Break",
+        "EUR_IBH1.2_Hit", "EUR_IBL1.2_Hit",
+        "EUR_IBH1.5_Hit", "EUR_IBL1.5_Hit",
+        "EUR_IBH2_Hit",   "EUR_IBL2_Hit",
+        "EUR_IBH_RTH_Hit","EUR_IBL_RTH_Hit"
+    ]
+    df = df[[c for c in desired_order if c in df.columns] + [c for c in df.columns if c not in desired_order]]
+
+    # Reformat trade_date to string (if present)
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
 
 if "time" in df.columns:
     if choice in ["Daily ES", "Weekly ES"]:
