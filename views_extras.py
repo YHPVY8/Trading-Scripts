@@ -225,102 +225,92 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 def euro_ib_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Euro IB metrics formatted like SPX Opening Range and returns a DF to render.
-    Deterministically recomputes:
-      eIBH Break = (Premarket Hi > EUR_IBH)
-      eIBL Break = (Premarket Lo < EUR_IBL)
-      eIB_Break_Both = both above are True
-    Also drops legacy equality flags and Op_Above/Below fields.
+    Euro IB metrics formatted like SPX Opening Range:
+      Top row: Rows, eIBH Break, eIBL Break, Break Both eIB
+      Below:   IBH/IBL ≥1.2×, ≥1.5×, ≥2.0×, then IBH→RTH, IBL→RTH
+    Returns the DF (possibly with a derived 'eIB_Break_Both') so App.py renders the table as usual.
     """
     if df is None or df.empty:
         return df
 
     dff = df.copy()
 
-    # Ensure date ascending so latest is at the bottom (consistent with App.py)
+    # Ensure ascending by a date-like col so latest is at the bottom
     for c in ["trade_date", "date", "time"]:
         if c in dff.columns:
             dff[c] = pd.to_datetime(dff[c], errors="coerce")
             dff = dff.sort_values(c, ascending=True).reset_index(drop=True)
             break
 
-    # --- Case-insensitive resolver
+    # Case-insensitive resolver (works for snake_case / spaced labels)
     cols_lower = {c.lower(): c for c in dff.columns}
-    def _find(*names):
+    def _find_col_ci(*names):
         for n in names:
             key = n.lower()
             if key in cols_lower:
                 return cols_lower[key]
         return None
 
-    # Inputs for break recompute
-    col_eur_ibh = _find("EUR_IBH", "eur_ibh")
-    col_eur_ibl = _find("EUR_IBL", "eur_ibl")
-    col_pm_hi   = _find("Premarket Hi", "premarket_hi", "premarket high")
-    col_pm_lo   = _find("Premarket Lo", "premarket_lo", "premarket low")
+    # Breaks (your table uses snake_case)
+    eibh_break = _find_col_ci("eibh_break", "eIBH Break", "eIBH_Break")
+    eibl_break = _find_col_ci("eibl_break", "eIBL Break", "eIBL_Break")
 
-    # Recompute break flags deterministically (don’t trust upstream text booleans)
-    if all(c in dff for c in [col_pm_hi, col_eur_ibh]):
-        s_pm_hi  = pd.to_numeric(dff[col_pm_hi], errors="coerce")
-        s_eibh   = pd.to_numeric(dff[col_eur_ibh], errors="coerce")
-        dff["eIBH Break"] = (s_pm_hi > s_eibh)
-    else:
-        dff["eIBH Break"] = pd.Series([None] * len(dff), dtype="boolean")
+    # Extension hits – include your snake_case column names explicitly
+    ibh12 = _find_col_ci("eibh12_hit", "EUR_IBH1.2_Hit", "eur_ibh1.2_hit", "eur_ibh12_hit", "eur_ibh_1_2_hit")
+    ibl12 = _find_col_ci("eibl12_hit", "EUR_IBL1.2_Hit", "eur_ibl1.2_hit", "eur_ibl12_hit", "eur_ibl_1_2_hit")
+    ibh15 = _find_col_ci("eibh15_hit", "EUR_IBH1.5_Hit", "eur_ibh1.5_hit", "eur_ibh15_hit", "eur_ibh_1_5_hit")
+    ibl15 = _find_col_ci("eibl15_hit", "EUR_IBL1.5_Hit", "eur_ibl1.5_hit", "eur_ibl15_hit", "eur_ibl_1_5_hit")
+    ibh20 = _find_col_ci("eibh20_hit", "EUR_IBH2_Hit",   "eur_ibh2_hit")
+    ibl20 = _find_col_ci("eibl20_hit", "EUR_IBL2_Hit",   "eur_ibl2_hit")
 
-    if all(c in dff for c in [col_pm_lo, col_eur_ibl]):
-        s_pm_lo  = pd.to_numeric(dff[col_pm_lo], errors="coerce")
-        s_eibl   = pd.to_numeric(dff[col_eur_ibl], errors="coerce")
-        dff["eIBL Break"] = (s_pm_lo < s_eibl)
-    else:
-        dff["eIBL Break"] = pd.Series([None] * len(dff), dtype="boolean")
+    ibh_rth = _find_col_ci("eur_ibh_rth_hit", "EUR_IBH_RTH_Hit")
+    ibl_rth = _find_col_ci("eur_ibl_rth_hit", "EUR_IBL_RTH_Hit")
 
-    dff["eIB_Break_Both"] = (dff["eIBH Break"] & dff["eIBL Break"])
+    # Robust bool coercion
+    def _coerce_bool_series(s: pd.Series) -> pd.Series:
+        if s is None:
+            return pd.Series(dtype="boolean")
+        return s.map(lambda v: True if str(v).strip().lower() in {"true","1","yes"} else
+                             (False if str(v).strip().lower() in {"false","0","no"} else None)).astype("boolean")
 
-    # Extensions & RTH hits
-    ibh12 = _find("EUR_IBH1.2_Hit","eur_ibh1.2_hit","eur_ibh12_hit","eur_ibh_1_2_hit")
-    ibl12 = _find("EUR_IBL1.2_Hit","eur_ibl1.2_hit","eur_ibl12_hit","eur_ibl_1_2_hit")
-    ibh15 = _find("EUR_IBH1.5_Hit","eur_ibh1.5_hit","eur_ibh15_hit","eur_ibh_1_5_hit")
-    ibl15 = _find("EUR_IBL1.5_Hit","eur_ibl1.5_hit","eur_ibl15_hit","eur_ibl_1_5_hit")
-    ibh2  = _find("EUR_IBH2_Hit","eur_ibh2_hit")
-    ibl2  = _find("EUR_IBL2_Hit","eur_ibl2_hit")
-    ibh_rth = _find("EUR_IBH_RTH_Hit","eur_ibh_rth_hit")
-    ibl_rth = _find("EUR_IBL_RTH_Hit","eur_ibl_rth_hit")
-
-    def _rate_bool_col(col) -> str:
-        if not col or col not in dff:
+    def _rate_bool_col(dfX, col) -> str:
+        if not col or col not in dfX:
             return "–"
-        s = dff[col]
-        if s.dtype != bool:
-            s = s.astype("boolean")
-        s = s.dropna()
+        s = _coerce_bool_series(dfX[col]).dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
-    # ---------------- Top metrics ----------------
+    # Derive Break Both if missing: must be >= any extension rate by definition
+    break_both_col = _find_col_ci("eib_break_both", "eIB_Break_Both", "Break Both eIB")
+    if not break_both_col and eibh_break and eibl_break and eibh_break in dff and eibl_break in dff:
+        break_both_col = "eIB_Break_Both"
+        s_up   = _coerce_bool_series(dff[eibh_break])
+        s_down = _coerce_bool_series(dff[eibl_break])
+        dff[break_both_col] = (s_up & s_down)
+
+    # Top metrics
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.metric("Rows", f"{len(dff):,}")
-    with c2: st.metric("eIBH Break",      _rate_bool_col("eIBH Break"))
-    with c3: st.metric("eIBL Break",      _rate_bool_col("eIBL Break"))
-    with c4: st.metric("Break Both eIB",  _rate_bool_col("eIB_Break_Both"))
+    with c2: st.metric("eIBH Break", _rate_bool_col(dff, eibh_break))
+    with c3: st.metric("eIBL Break", _rate_bool_col(dff, eibl_break))
+    with c4: st.metric("Break Both eIB", _rate_bool_col(dff, break_both_col))
 
-    # --------------- Extensions ---------------
+    # Extensions
     st.markdown("#### Euro IB Extensions")
     r1 = st.columns(6)
-    with r1[0]: st.metric("IBH ≥1.2×", _rate_bool_col(ibh12))
-    with r1[1]: st.metric("IBL ≥1.2×", _rate_bool_col(ibl12))
-    with r1[2]: st.metric("IBH ≥1.5×", _rate_bool_col(ibh15))
-    with r1[3]: st.metric("IBL ≥1.5×", _rate_bool_col(ibl15))
-    with r1[4]: st.metric("IBH ≥2.0×", _rate_bool_col(ibh2))
-    with r1[5]: st.metric("IBL ≥2.0×", _rate_bool_col(ibl2))
+    with r1[0]: st.metric("IBH ≥1.2×", _rate_bool_col(dff, ibh12))
+    with r1[1]: st.metric("IBL ≥1.2×", _rate_bool_col(dff, ibl12))
+    with r1[2]: st.metric("IBH ≥1.5×", _rate_bool_col(dff, ibh15))
+    with r1[3]: st.metric("IBL ≥1.5×", _rate_bool_col(dff, ibl15))
+    with r1[4]: st.metric("IBH ≥2.0×", _rate_bool_col(dff, ibh20))
+    with r1[5]: st.metric("IBL ≥2.0×", _rate_bool_col(dff, ibl20))
 
     r2 = st.columns(2)
-    with r2[0]: st.metric("IBH → RTH Hit", _rate_bool_col(ibh_rth))
-    with r2[1]: st.metric("IBL → RTH Hit", _rate_bool_col(ibl_rth))
+    with r2[0]: st.metric("IBH → RTH Hit", _rate_bool_col(dff, ibh_rth))
+    with r2[1]: st.metric("IBL → RTH Hit", _rate_bool_col(dff, ibl_rth))
 
-    # Drop legacy equality + requested Op_* fields from the display
-    to_drop_ci = {"eur_ibh=hi", "eur_ibl=lo", "op_above_eibh", "op_below_eibl"}
-    drop_cols = [c for c in dff.columns if c.lower() in to_drop_ci]
-    if drop_cols:
-        dff = dff.drop(columns=drop_cols)
+    # Debug if nothing resolved
+    if not any([eibh_break, eibl_break, break_both_col, ibh12, ibl12, ibh15, ibl15, ibh20, ibl20, ibh_rth, ibl_rth]):
+        st.caption(f"🧪 Debug: Euro IB columns present → {', '.join(dff.columns)}")
 
     return dff
 
