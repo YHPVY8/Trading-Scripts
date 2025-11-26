@@ -99,7 +99,7 @@ try:
             if len(daily_agg) >= 1:
                 current_date = daily_agg["time"].iloc[-1]
 
-                # === DAY (unchanged layout): last intraday price (es_30m) vs yesterday's daily close ===
+                # === DAY: last intraday price (es_30m) vs yesterday's daily close ===
                 try:
                     lp_resp = (
                         sb.table("es_30m")
@@ -559,62 +559,3 @@ with range_placeholder:
     _render_range_position_bar(
         st, current_close, prev_rth_low, prev_rth_high, session_low_cutoff, session_high_cutoff
     )
-
-# =========================
-# Conditions vs Trailing table (trimmed)
-# =========================
-st.markdown("### Conditions vs Trailing (last N trade days)")
-max_slider = int(min(120, TRADE_DAYS_TO_KEEP, len(daily)))
-show_days = st.slider("Show last N trade days", 10, max_slider, min(30, max_slider), 5)
-
-cols = [
-    "trade_date",
-    "day_open","day_high","day_low","day_close","day_range",
-    "session_high_at_cutoff","session_low_at_cutoff",
-    "cum_vol_at_cutoff","day_volume","day_volume_tw_avg",
-    "avg_hi_op","avg_hi_op_tw_avg","avg_hi_op_pct_vs_tw",
-    "avg_op_lo","avg_op_lo_tw_avg","avg_op_lo_pct_vs_tw",
-]
-existing = [c for c in cols if c in daily.columns]
-tbl = daily[existing].tail(int(show_days)).copy()
-
-labels = {
-    "trade_date":"Trade Date",
-    "day_open":"Open","day_high":"High","day_low":"Low","day_close":"Close","day_range":"Range",
-    "session_high_at_cutoff":"Session High (cutoff)",
-    "session_low_at_cutoff":"Session Low (cutoff)",
-    "cum_vol_at_cutoff":"Cum Vol (cutoff)",
-    "day_volume":"Vol (day)","day_volume_tw_avg":f"Vol {TRAILING_WINDOW}d",
-    "avg_hi_op":"Avg(Hi-Op)","avg_hi_op_tw_avg":f"Avg(Hi-Op) {TRAILING_WINDOW}d","avg_hi_op_pct_vs_tw":f"Avg(Hi-Op) vs {TRAILING_WINDOW}d",
-    "avg_op_lo":"Avg(Op-Lo)","avg_op_lo_tw_avg":f"Avg(Op-Lo) {TRAILING_WINDOW}d","avg_op_lo_pct_vs_tw":f"Avg(Op-Lo) vs {TRAILING_WINDOW}d",
-}
-tbl = tbl.rename(columns=labels)
-
-fmt = {}
-for name in tbl.columns:
-    if name == "Trade Date":
-        continue
-    if "Vol" in name or "Vol (" in name:
-        fmt[name] = "{:,.0f}"
-    elif "vs" in name:
-        fmt[name] = "{:,.2f}"
-    else:
-        fmt[name] = "{:,.2f}"
-
-def color_pos_neg(val):
-    if pd.isna(val):
-        return ""
-    try:
-        v = float(val)
-    except Exception:
-        return ""
-    return f"color: {'#16a34a' if v>0 else ('#dc2626' if v<0 else '#111827')};"
-
-vs_cols = [c for c in tbl.columns if "vs" in c]
-styled = (
-    tbl.style
-       .format(fmt)
-       .applymap(color_pos_neg, subset=vs_cols)
-       .set_properties(subset=["Trade Date"], **{"font-weight":"600"})
-)
-st.dataframe(styled, use_container_width=True)
