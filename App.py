@@ -78,54 +78,69 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# ===================== EURO IB: lock display + bypass keep_cols =====================
+# ===================== EURO IB (es_eur_ib_summary) =====================
 if choice == "Euro IB":
-    # 1) Metrics / boolean coercion (tiles) and tolerant column handling
+    # 1) metrics + tolerant column handling from helper
     df = euro_ib_filter_and_metrics(df)
     if df.empty:
         st.info("No rows for Euro IB after filtering.")
         st.stop()
 
-    # 2) Canonicalize names to snake_case we will display
+    # 2) Normalize column names to schema (you provided)
     rename_map = {
-        # core levels
         "EUR_IBH": "eur_ibh", "eIBH": "eur_ibh",
         "EUR_IBL": "eur_ibl", "eIBL": "eur_ibl",
-
-        # breaks (these feed both tiles and table)
-        "eIBH Break": "eibh_break",
-        "eIBL Break": "eibl_break",
-
-        # extension hits
+        "Premarket Hi": "pre_hi", "Premarket Low": "pre_lo",
+        "eIBH Break": "eibh_break", "eIBL Break": "eibl_break",
         "EUR_IBH1.2_Hit": "eibh12_hit", "eur_ibh1.2_hit": "eibh12_hit", "eur_ibh12_hit": "eibh12_hit",
         "EUR_IBL1.2_Hit": "eibl12_hit", "eur_ibl1.2_hit": "eibl12_hit", "eur_ibl12_hit": "eibl12_hit",
         "EUR_IBH1.5_Hit": "eibh15_hit", "eur_ibh1.5_hit": "eibh15_hit", "eur_ibh15_hit": "eibh15_hit",
         "EUR_IBL1.5_Hit": "eibl15_hit", "eur_ibl1.5_hit": "eibl15_hit", "eur_ibl15_hit": "eibl15_hit",
-        "EUR_IBH2_Hit":   "eibh20_hit", "eur_ibh2_hit":   "eibh20_hit",
-        "EUR_IBL2_Hit":   "eibl20_hit", "eur_ibl2_hit":   "eibl20_hit",
-
-        # RTH hits
+        "EUR_IBH2_Hit": "eibh20_hit", "eur_ibh2_hit": "eibh20_hit",
+        "EUR_IBL2_Hit": "eibl20_hit", "eur_ibl2_hit": "eibl20_hit",
         "EUR_IBH_RTH_Hit": "eur_ibh_rth_hit",
         "EUR_IBL_RTH_Hit": "eur_ibl_rth_hit",
-
-        # occasional premarket aliases (we won’t display them but normalize anyway)
-        "Premarket Hi": "pre_hi",
-        "Premarket Low": "pre_lo",
-        "Premarket Low ": "pre_lo",
     }
     df = df.rename(columns={c: rename_map.get(c, c) for c in df.columns})
 
-    # 3) Ensure 'day' exists (DB table doesn’t have it)
+    # 3) Drop columns you said not to show
+    drop_cols = {"eur_ibh=hi", "eur_ibl=lo", "Op_Above_EIBH", "Op_Below_EIBL", "pre_hi", "pre_lo",
+                 "EUR_IB_Range", "Premarket_Range", "eur_ibh_range", "premarket_range"}
+    df = df.drop(columns=[c for c in df.columns if c in drop_cols], errors="ignore")
+
+    # 4) Ensure day exists (DB table doesn’t include it)
     if "day" not in df.columns and "trade_date" in df.columns:
         td = pd.to_datetime(df["trade_date"], errors="coerce")
-        df["day"] = td.dt.day_name().str[:3]  # e.g., Mon, Tue
+        df["day"] = td.dt.day_name().str[:3]
 
-    # 4) Drop junk columns you explicitly don’t want
-    drop_cols = {c for c in df.columns} & {"eur_ibh=hi", "eur_ibl=lo", "Op_Above_EIBH", "Op_Below_EIBL", "op_above_eibh", "op_below_eibl", "pre_hi", "pre_lo", "EUR_IB_Range", "Premarket_Range", "eur_ibh_range", "premarket_range"}
-    if drop_cols:
-        df = df.drop(columns=list(drop_cols))
+    # 5) ===== Top metrics (your exact definitions) =====
+    def _to_bool(s):
+        return s.map(lambda v: True if str(v).strip().lower() in {"true","1","yes"} else
+                            (False if str(v).strip().lower() in {"false","0","no"} else None)).astype("boolean")
 
-    # 5) EXACT display set and order you requested
+    tot = len(df)
+    eibh = _to_bool(df["eibh_break"]) if "eibh_break" in df else pd.Series(dtype="boolean")
+    eibl = _to_bool(df["eibl_break"]) if "eibl_break" in df else pd.Series(dtype="boolean")
+    # Break both (OR): either side broke
+    if not eibh.empty and not eibl.empty:
+        break_both_series = (eibh | eibl)
+    elif not eibh.empty:
+        break_both_series = eibh
+    elif not eibl.empty:
+        break_both_series = eibl
+    else:
+        break_both_series = pd.Series(dtype="boolean")
+
+    def _rate(s):
+        s = s.dropna()
+        return "–" if s.empty or tot == 0 else f"{100.0 * (s.sum() / tot):.1f}%"
+
+    c1, c2, c3, _ = st.columns(4)
+    with c1: st.metric("eIBH Break", _rate(eibh) if "eibh_break" in df else "–")
+    with c2: st.metric("eIBL Break", _rate(eibl) if "eibl_break" in df else "–")
+    with c3: st.metric("Break Both eIB", _rate(break_both_series) if tot else "–")
+
+    # 6) EXACT table order: eIBH/eIBL then Break flags right after EUR IBL
     display_order = [
         "trade_date", "day",
         "eur_ibh", "eur_ibl",
@@ -135,15 +150,13 @@ if choice == "Euro IB":
         "eibh20_hit", "eibl20_hit",
         "eur_ibh_rth_hit", "eur_ibl_rth_hit",
     ]
-    # Keep only these (when present) and in this order
-    existing = [c for c in display_order if c in df.columns]
-    df = df[existing]
+    df = df[[c for c in display_order if c in df.columns]]
 
-    # 6) Format the date for the table
+    # 7) Format date for display
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-    # 7) Make sure Euro-IB ignores any view-level keep list later
+    # 8) Make sure Euro-IB ignores any view-level keep list later
     keep_cols = None
 
 # ===================== SPX Opening Range =====================
@@ -341,7 +354,7 @@ HEADER_LABELS = {
         "broke_down": "Broke Down",
         "broke_both": "Broke Both",
     },
-    # --- Euro IB headers for the columns we now display ---
+    # Euro IB headers
     "Euro IB": {
         "trade_date": "Date",
         "day": "Day",
