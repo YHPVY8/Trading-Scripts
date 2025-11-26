@@ -21,7 +21,7 @@ BASE_TABLES = OrderedDict({
     "4h Pivots": ("es_4hr_pivot_levels", "time"),
     "30m Pivots": ("es_30m_pivot_levels", "time"),
     "Range Extensions": ("es_range_extensions", "date"),
-    "RTH Pivots": ("es_rth_pivot_levels", "trade_date"),   
+    "RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
     "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
     "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
 })
@@ -60,9 +60,51 @@ def build_tables(sb, cache_bust: int | None = None):
       1) BASE_TABLES (always included),
       2) views from Supabase (dashboard_views), and
       3) optional YAML views (views.yaml).
+
+    Adds a hand-coded 'Euro IB' dataset (from es_eur_ib_summary) with labels/keep.
     No Streamlit cache here to avoid stale registries.
     """
     tables = OrderedDict(BASE_TABLES)
+
+    # ---- Add Euro IB fixed view (summary table) ----
+    tables["Euro IB"] = {
+        "table": "es_eur_ib_summary",
+        "date_col": "trade_date",
+        "keep": [
+            "trade_date",
+            "eur_ibh", "eur_ibl",
+            "pre_hi", "pre_lo",
+            "eibh_break", "eibl_break",
+            # extensions (premarket hits)
+            "eibh12_hit", "eibl12_hit",
+            "eibh15_hit", "eibl15_hit",
+            "eibh20_hit", "eibl20_hit",
+            # context in RTH
+            "eur_ibh_rth_hit", "eur_ibl_rth_hit",
+            "rth_op", "rth_hi", "rth_lo", "rth_cl",
+        ],
+        "labels": {
+            "trade_date": "Date",
+            "eur_ibh": "EUR_IBH",
+            "eur_ibl": "EUR_IBL",
+            "pre_hi": "Premarket Hi",
+            "pre_lo": "Premarket Lo",
+            "eibh_break": "eIBH Break",
+            "eibl_break": "eIBL Break",
+            "eibh12_hit": "IBH×1.2 Hit (Pre)",
+            "eibl12_hit": "IBL×1.2 Hit (Pre)",
+            "eibh15_hit": "IBH×1.5 Hit (Pre)",
+            "eibl15_hit": "IBL×1.5 Hit (Pre)",
+            "eibh20_hit": "IBH×2.0 Hit (Pre)",
+            "eibl20_hit": "IBL×2.0 Hit (Pre)",
+            "eur_ibh_rth_hit": "IBH in RTH Range",
+            "eur_ibl_rth_hit": "IBL in RTH Range",
+            "rth_op": "RTH Op",
+            "rth_hi": "RTH Hi",
+            "rth_lo": "RTH Lo",
+            "rth_cl": "RTH CL",
+        },
+    }
 
     # 2) DB views
     for r in _load_db_views(sb):
