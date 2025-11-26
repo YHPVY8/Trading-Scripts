@@ -10,7 +10,6 @@ from views_config import build_tables
 from views_extras import (
     render_current_levels,
     spx_opening_range_filter_and_metrics,
-    euro_ib_filter_and_metrics,
 )
 
 # ---- CONFIG ----
@@ -78,79 +77,6 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# ===================== EURO IB (es_eur_ib_summary) =====================
-if choice == "Euro IB":
-    # Do NOT call helpers; just use the raw table as-is
-    # (TABLES already points to es_eur_ib_summary)
-    # df already loaded above via sb.table(table_name).select("*") ...
-
-    # Ensure display columns only (your exact order)
-    display_order = [
-        "trade_date", "day",
-        "eur_ibh", "eur_ibl",
-        "eibh_break", "eibl_break",
-        "eibh12_hit", "eibl12_hit",
-        "eibh15_hit", "eibl15_hit",
-        "eibh20_hit", "eibl20_hit",
-        "eur_ibh_rth_hit", "eur_ibl_rth_hit",
-    ]
-
-    # Add Day if not present
-    if "day" not in df.columns and "trade_date" in df.columns:
-        td = pd.to_datetime(df["trade_date"], errors="coerce")
-        df["day"] = td.dt.day_name().str[:3]
-
-    # Coerce *only if* Supabase returned strings; otherwise leave booleans untouched
-    bool_cols = [
-        "eibh_break","eibl_break",
-        "eibh12_hit","eibl12_hit",
-        "eibh15_hit","eibl15_hit",
-        "eibh20_hit","eibl20_hit",
-        "eur_ibh_rth_hit","eur_ibl_rth_hit",
-    ]
-    for c in bool_cols:
-        if c in df.columns and df[c].dtype == object:
-            s = df[c].astype(str).str.lower().str.strip()
-            df[c] = s.map({"true": True, "false": False}).astype("boolean")
-
-    # Lock to your exact columns (drop everything else)
-    df = df[[c for c in display_order if c in df.columns]].copy()
-
-    # Format date for display
-    if "trade_date" in df.columns:
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
-    # ===== Top metrics (pure SUMIF-True / COUNT rows) =====
-    total_rows = len(df)
-    def pct_true(col):
-        if col not in df.columns or total_rows == 0:
-            return "–"
-        s = df[col]
-        # treat boolean dtype directly; if nullable boolean, use fillna(False)
-        if s.dtype.name in ("bool", "boolean"):
-            hits = s.fillna(False).sum()
-        else:
-            # (Shouldn’t happen after coercion, but safe)
-            hits = (s.astype(str).str.lower() == "true").sum()
-        return f"{100.0 * hits / total_rows:.1f}%"
-
-    eibh_break_pct = pct_true("eibh_break")
-    eibl_break_pct = pct_true("eibl_break")
-    # Break Both = OR of the two break flags
-    if {"eibh_break","eibl_break"}.issubset(df.columns) and total_rows > 0:
-        both_series = df["eibh_break"].fillna(False) | df["eibl_break"].fillna(False)
-        break_both_pct = f"{100.0 * both_series.sum() / total_rows:.1f}%"
-    else:
-        break_both_pct = "–"
-
-    c1, c2, c3, _ = st.columns(4)
-    c1.metric("eIBH Break", eibh_break_pct)
-    c2.metric("eIBL Break", eibl_break_pct)
-    c3.metric("Break Both eIB", break_both_pct)
-
-    # Prevent any later keep-list from trimming columns for Euro IB
-    keep_cols = None
-
 
 # ===================== SPX Opening Range =====================
 if choice == "SPX Opening Range":
@@ -179,7 +105,7 @@ if "time" in df.columns:
     else:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M")
 
-# --- Restrict columns for fixed datasets (Euro-IB is already locked above) ---
+# --- Restrict columns for fixed datasets ---
 if choice == "Daily Pivots":
     keep_cols_fixed = ["date","day","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
                        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
@@ -217,8 +143,8 @@ elif choice in ["RTH Pivots", "ON Pivots"]:
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
-# --- Generic view-level subset (skip for Euro-IB) ---
-if keep_cols and choice != "Euro IB":
+# --- Generic view-level subset ---
+if keep_cols:
     df = df[[c for c in keep_cols if c in df.columns]]
 
 # ---- Format all numeric columns ----
@@ -346,23 +272,6 @@ HEADER_LABELS = {
         "broke_up": "Broke Up",
         "broke_down": "Broke Down",
         "broke_both": "Broke Both",
-    },
-    # Euro IB headers
-    "Euro IB": {
-        "trade_date": "Date",
-        "day": "Day",
-        "eur_ibh": "EUR IBH",
-        "eur_ibl": "EUR IBL",
-        "eibh_break": "eIBH Break",
-        "eibl_break": "eIBL Break",
-        "eibh12_hit": "IBH ≥1.2×",
-        "eibl12_hit": "IBL ≥1.2×",
-        "eibh15_hit": "IBH ≥1.5×",
-        "eibl15_hit": "IBL ≥1.5×",
-        "eibh20_hit": "IBH ≥2.0×",
-        "eibl20_hit": "IBL ≥2.0×",
-        "eur_ibh_rth_hit": "IBH → RTH Hit",
-        "eur_ibl_rth_hit": "IBL → RTH Hit",
     },
 }
 
