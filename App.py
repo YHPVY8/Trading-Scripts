@@ -85,30 +85,35 @@ if choice == "Euro IB":
         st.info("No rows for Euro IB after filtering.")
         st.stop()
 
-    # Drop legacy equality columns
+    # Derived ranges for display (not stored in DB)
+    if {"eur_ibh", "eur_ibl"}.issubset(df.columns):
+        df["eur_ibh_range"] = pd.to_numeric(df["eur_ibh"], errors="coerce") - pd.to_numeric(df["eur_ibl"], errors="coerce")
+    if {"pre_hi", "pre_lo"}.issubset(df.columns):
+        df["premarket_range"] = pd.to_numeric(df["pre_hi"], errors="coerce") - pd.to_numeric(df["pre_lo"], errors="coerce")
+
+    # Drop legacy equality columns (if present)
     drop_eq = [c for c in df.columns if c.lower().strip() in {"eur_ibh=hi", "eur_ibl=lo"}]
     if drop_eq:
         df = df.drop(columns=drop_eq)
 
-    # Correct column order based on SQL table names
+    # Order so eIBH/eIBL Break appear RIGHT AFTER Premarket Range
     desired_order = [
         "trade_date",
         "eur_ibh", "eur_ibl",
         "pre_hi", "pre_lo",
+        "eur_ibh_range", "premarket_range",
         "eibh_break", "eibl_break", "eIB_Break_Both",
         "eibh12_hit", "eibl12_hit",
         "eibh15_hit", "eibl15_hit",
         "eibh20_hit", "eibl20_hit",
         "eur_ibh_rth_hit", "eur_ibl_rth_hit",
     ]
-
     df = df[[c for c in desired_order if c in df.columns] +
             [c for c in df.columns if c not in desired_order]]
 
     # Reformat trade_date for display
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
 
 # --- SPX Opening Range: filter + order columns (run once, here) ---
 if choice == "SPX Opening Range":
@@ -308,6 +313,27 @@ HEADER_LABELS = {
         "broke_down": "Broke Down",
         "broke_both": "Broke Both",
     },
+    # --- Euro IB nice headers ---
+    "Euro IB": {
+        "trade_date": "Date",
+        "eur_ibh": "EUR IBH",
+        "eur_ibl": "EUR IBL",
+        "pre_hi": "Premarket High",
+        "pre_lo": "Premarket Low",
+        "eur_ibh_range": "IB Range",
+        "premarket_range": "Premarket Range",
+        "eibh_break": "eIBH Break",
+        "eibl_break": "eIBL Break",
+        "eIB_Break_Both": "Break Both eIB",
+        "eibh12_hit": "IBH ≥1.2×",
+        "eibl12_hit": "IBL ≥1.2×",
+        "eibh15_hit": "IBH ≥1.5×",
+        "eibl15_hit": "IBL ≥1.5×",
+        "eibh20_hit": "IBH ≥2.0×",
+        "eibl20_hit": "IBL ≥2.0×",
+        "eur_ibh_rth_hit": "IBH → RTH Hit",
+        "eur_ibl_rth_hit": "IBL → RTH Hit",
+    },
 }
 
 # Detect boolean-like columns anywhere in the dataframe
@@ -370,7 +396,7 @@ st.markdown("""
     }
     .scroll-table-container table {
         width: 100%;
-        border-collapse: collapse;
+        border-collapse: collapse.
     }
     /* Sticky header with medium-grey bg + persistent black "bottom border" */
     .scroll-table-container thead th {
