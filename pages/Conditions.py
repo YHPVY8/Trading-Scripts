@@ -122,11 +122,14 @@ for col in ["open", "high", "low", "close", "Volume"]:
         st.stop()
 
 # =========================
-# Join enriched 30m data (optional)
+# Join enriched 30m data (now includes MA10 equal-time fields)
 # =========================
 enriched_cols = [
-    "time","cum_vol","session_high","session_low",
-    "hi_op","op_lo","pHi","pLo","hi_phi","lo_plo",
+    "time",
+    "cum_vol", "cum_vol_ma10",
+    "session_high", "session_low",
+    "cum_range", "cum_range_ma10",
+    "hi_op", "op_lo", "pHi", "pLo", "hi_phi", "lo_plo",
 ]
 
 try:
@@ -159,6 +162,10 @@ if "session_high" not in df.columns or df["session_high"].isna().all():
     df["session_high"] = df.groupby("trade_day")["high"].cummax()
 if "session_low" not in df.columns or df["session_low"].isna().all():
     df["session_low"]  = df.groupby("trade_day")["low"].cummin()
+
+# NEW: cum_range fallback
+if "cum_range" not in df.columns or df["cum_range"].isna().all():
+    df["cum_range"] = df["session_high"] - df["session_low"]
 
 if "hi_op" not in df.columns or df["hi_op"].isna().all():
     df["hi_op"]  = df["high"] - df["open"]
@@ -236,10 +243,14 @@ def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
         avg_hi_pHi=("hi_pHi","mean"),
         avg_lo_pLo=("lo_pLo","mean"),
     )
+    # UPDATED: carry equal-time cumulative stats and their MA10 peers
     lasts = scope.groupby("trade_day").agg(
         session_high_at_cutoff=("session_high","last"),
         session_low_at_cutoff=("session_low","last"),
         cum_vol_at_cutoff=("cum_vol","last"),
+        cum_vol_ma10_at_cutoff=("cum_vol_ma10","last"),
+        cum_range_at_cutoff=("cum_range","last"),
+        cum_range_ma10_at_cutoff=("cum_range_ma10","last"),
     )
     out = (
         first_last.join(hilo).join(bars).join(perbar).join(lasts)
@@ -335,16 +346,34 @@ hdr = f"{SYMBOL} — Full day"
 st.subheader(hdr)
 
 k1, k2, k3, k4 = st.columns(4)
+
+# Range vs 10d (equal-time cumulative range)
+curr_cum_range = row.get("cum_range_at_cutoff", np.nan)
+base_cum_range_ma10 = row.get("cum_range_ma10_at_cutoff", np.nan)
+delta_range = (
+    None if (pd.isna(curr_cum_range) or pd.isna(base_cum_range_ma10) or base_cum_range_ma10 == 0)
+    else f"{(curr_cum_range / base_cum_range_ma10 - 1)*100:+.1f}%"
+)
 k1.metric(
-    f"Range vs {TRAILING_WINDOW}d",
-    f"{row.get('day_range', np.nan):.2f}" if pd.notna(row.get('day_range')) else "—",
-    None if pd.isna(row.get('day_range_pct_vs_tw')) else f"{row['day_range_pct_vs_tw']*100:+.1f}%"
+    f"Range vs {TRAILING_WINDOW}d (equal-time)",
+    "—" if pd.isna(curr_cum_range) else f"{curr_cum_range:.2f}",
+    delta_range
+)
+
+# Cum Vol vs 10d (equal-time cumulative volume)
+curr_cum_vol = row.get("cum_vol_at_cutoff", np.nan)
+base_cum_vol_ma10 = row.get("cum_vol_ma10_at_cutoff", np.nan)
+delta_vol = (
+    None if (pd.isna(curr_cum_vol) or pd.isna(base_cum_vol_ma10) or base_cum_vol_ma10 == 0)
+    else f"{(curr_cum_vol / base_cum_vol_ma10 - 1)*100:+.1f}%"
 )
 k2.metric(
-    f"Cum Vol vs {TRAILING_WINDOW}d",
-    f"{row.get('cum_vol_at_cutoff', np.nan):,.0f}" if pd.notna(row.get('cum_vol_at_cutoff')) else "—",
-    None
+    f"Cum Vol vs {TRAILING_WINDOW}d (equal-time)",
+    "—" if pd.isna(curr_cum_vol) else f"{curr_cum_vol:,.0f}",
+    delta_vol
 )
+
+# Unchanged
 k3.metric("Session High (cutoff)",
           f"{row.get('session_high_at_cutoff', np.nan):.2f}" if pd.notna(row.get('session_high_at_cutoff')) else "—")
 k4.metric("Session Low (cutoff)",
