@@ -225,14 +225,12 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 def euro_ib_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Euro IB metrics formatted like SPX Opening Range:
-      Top row: Rows, eIBH Break, eIBL Break, Break Both eIB
-      Below:   IBH/IBL ≥1.2×, ≥1.5×, ≥2.0×, then IBH→RTH, IBL→RTH
-
-    Also:
-      - If eIBH/eIBL Break columns are missing, compute them from
-        (Premarket Hi > EUR_IBH) and (Premarket Lo < EUR_IBL).
-      - Hide legacy equality columns (EUR_IBH=Hi, EUR_IBL=Lo).
+    Euro IB metrics formatted like SPX Opening Range and returns a DF to render.
+    Deterministically recomputes:
+      eIBH Break = (Premarket Hi > EUR_IBH)
+      eIBL Break = (Premarket Lo < EUR_IBL)
+      eIB_Break_Both = both above are True
+    Also drops legacy equality flags and Op_Above/Below fields.
     """
     if df is None or df.empty:
         return df
@@ -250,37 +248,35 @@ def euro_ib_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     cols_lower = {c.lower(): c for c in dff.columns}
     def _find(*names):
         for n in names:
-            if n.lower() in cols_lower:
-                return cols_lower[n.lower()]
+            key = n.lower()
+            if key in cols_lower:
+                return cols_lower[key]
         return None
 
-    # Canonical names (robust to snake/camel/space)
+    # Inputs for break recompute
     col_eur_ibh = _find("EUR_IBH", "eur_ibh")
     col_eur_ibl = _find("EUR_IBL", "eur_ibl")
     col_pm_hi   = _find("Premarket Hi", "premarket_hi", "premarket high")
     col_pm_lo   = _find("Premarket Lo", "premarket_lo", "premarket low")
 
-    col_eibh_break = _find("eIBH Break", "eIBH_Break", "eibh_break", "eibhbreak")
-    col_eibl_break = _find("eIBL Break", "eIBL_Break", "eibl_break", "eiblbreak")
+    # Recompute break flags deterministically (don’t trust upstream text booleans)
+    if all(c in dff for c in [col_pm_hi, col_eur_ibh]):
+        s_pm_hi  = pd.to_numeric(dff[col_pm_hi], errors="coerce")
+        s_eibh   = pd.to_numeric(dff[col_eur_ibh], errors="coerce")
+        dff["eIBH Break"] = (s_pm_hi > s_eibh)
+    else:
+        dff["eIBH Break"] = pd.Series([None] * len(dff), dtype="boolean")
 
-    # Compute missing break columns if we have inputs
-    if not col_eibh_break and all(x in dff for x in [col_pm_hi, col_eur_ibh] if x):
-        col_eibh_break = "eIBH Break"
-        dff[col_eibh_break] = pd.to_numeric(dff[col_pm_hi], errors="coerce") > pd.to_numeric(dff[col_eur_ibh], errors="coerce")
+    if all(c in dff for c in [col_pm_lo, col_eur_ibl]):
+        s_pm_lo  = pd.to_numeric(dff[col_pm_lo], errors="coerce")
+        s_eibl   = pd.to_numeric(dff[col_eur_ibl], errors="coerce")
+        dff["eIBL Break"] = (s_pm_lo < s_eibl)
+    else:
+        dff["eIBL Break"] = pd.Series([None] * len(dff), dtype="boolean")
 
-    if not col_eibl_break and all(x in dff for x in [col_pm_lo, col_eur_ibl] if x):
-        col_eibl_break = "eIBL Break"
-        dff[col_eibl_break] = pd.to_numeric(dff[col_pm_lo], errors="coerce") < pd.to_numeric(dff[col_eur_ibl], errors="coerce")
+    dff["eIB_Break_Both"] = (dff["eIBH Break"] & dff["eIBL Break"])
 
-    # Derive "Break Both eIB" if not present
-    col_break_both = _find("eIB_Break_Both", "Break Both eIB", "eib_break_both")
-    if not col_break_both and col_eibh_break and col_eibl_break:
-        col_break_both = "eIB_Break_Both"
-        s_up   = dff[col_eibh_break].astype(str).str.lower().isin({"true","1","yes"})
-        s_down = dff[col_eibl_break].astype(str).str.lower().isin({"true","1","yes"})
-        dff[col_break_both] = s_up & s_down
-
-    # Extension & RTH hit columns (same resolver list as before)
+    # Extensions & RTH hits
     ibh12 = _find("EUR_IBH1.2_Hit","eur_ibh1.2_hit","eur_ibh12_hit","eur_ibh_1_2_hit")
     ibl12 = _find("EUR_IBL1.2_Hit","eur_ibl1.2_hit","eur_ibl12_hit","eur_ibl_1_2_hit")
     ibh15 = _find("EUR_IBH1.5_Hit","eur_ibh1.5_hit","eur_ibh15_hit","eur_ibh_1_5_hit")
@@ -293,16 +289,18 @@ def euro_ib_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     def _rate_bool_col(col) -> str:
         if not col or col not in dff:
             return "–"
-        s = dff[col].astype(str).str.strip().str.lower()
-        s = s.map(lambda v: True if v in {"true","1","yes"} else (False if v in {"false","0","no"} else None)).dropna()
+        s = dff[col]
+        if s.dtype != bool:
+            s = s.astype("boolean")
+        s = s.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     # ---------------- Top metrics ----------------
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.metric("Rows", f"{len(dff):,}")
-    with c2: st.metric("eIBH Break", _rate_bool_col(col_eibh_break))
-    with c3: st.metric("eIBL Break", _rate_bool_col(col_eibl_break))
-    with c4: st.metric("Break Both eIB", _rate_bool_col(col_break_both))
+    with c2: st.metric("eIBH Break",      _rate_bool_col("eIBH Break"))
+    with c3: st.metric("eIBL Break",      _rate_bool_col("eIBL Break"))
+    with c4: st.metric("Break Both eIB",  _rate_bool_col("eIB_Break_Both"))
 
     # --------------- Extensions ---------------
     st.markdown("#### Euro IB Extensions")
@@ -318,10 +316,11 @@ def euro_ib_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     with r2[0]: st.metric("IBH → RTH Hit", _rate_bool_col(ibh_rth))
     with r2[1]: st.metric("IBL → RTH Hit", _rate_bool_col(ibl_rth))
 
-    # Hide legacy equality columns if present
-    legacy_eq_cols = [c for c in dff.columns if c.lower().strip() in {"eur_ibh=hi", "eur_ibl=lo"}]
-    if legacy_eq_cols:
-        dff = dff.drop(columns=legacy_eq_cols)
+    # Drop legacy equality + requested Op_* fields from the display
+    to_drop_ci = {"eur_ibh=hi", "eur_ibl=lo", "op_above_eibh", "op_below_eibl"}
+    drop_cols = [c for c in dff.columns if c.lower() in to_drop_ci]
+    if drop_cols:
+        dff = dff.drop(columns=drop_cols)
 
     return dff
 
