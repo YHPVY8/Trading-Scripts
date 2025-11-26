@@ -97,7 +97,7 @@ if choice == "Euro IB":
         "trade_date", "day", "symbol",
         "EUR_IBH", "EUR_IBL", "Premarket Hi", "Premarket Lo",
         "EUR_IB_Range", "Premarket_Range",
-        "eIBH Break", "eIBL Break", "eIB_Break_Both",
+        "eibh_break", "eibl_break", "eIB_Break_Both",
         "EUR_IBH1.2_Hit", "EUR_IBL1.2_Hit",
         "EUR_IBH1.5_Hit", "EUR_IBL1.5_Hit",
         "EUR_IBH2_Hit",   "EUR_IBL2_Hit",
