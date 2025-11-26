@@ -20,15 +20,6 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 # =========================
 # Helpers
 # =========================
-def _period_return_open_to_close(sub_df: pd.DataFrame) -> float:
-    if sub_df is None or sub_df.empty:
-        return np.nan
-    first_open = sub_df["period_open"].iloc[0]
-    last_close = sub_df["period_close"].iloc[-1]
-    if pd.isna(first_open) or pd.isna(last_close) or first_open == 0:
-        return np.nan
-    return (last_close / first_open) - 1.0
-
 def trailing_mean(s: pd.Series, n: int) -> pd.Series:
     return s.rolling(int(n)).mean().shift(1)
 
@@ -38,7 +29,7 @@ TRAILING_WINDOW = 10
 TRADE_DAYS_TO_KEEP = 180
 
 # =========================
-# Title + top tiles
+# Title + placeholders
 # =========================
 st.title("Market Conditions")
 
@@ -74,94 +65,7 @@ def _perf_tile(container, label: str, ret: float):
     """
     container.markdown(html, unsafe_allow_html=True)
 
-# Preload performance tile data
-day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
-daily_agg = None
-
-try:
-    perf_resp = (
-        sb.table("daily_es")
-          .select("time, open, close")
-          .order("time", desc=True)
-          .limit(260)
-          .execute()
-    )
-    perf_df = pd.DataFrame(perf_resp.data)
-    if not perf_df.empty and {"time","open","close"}.issubset(perf_df.columns):
-        perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
-        perf_df = perf_df.dropna(subset=["time","open","close"])
-        if not perf_df.empty:
-            daily_agg = (
-                perf_df.groupby("time")
-                       .agg(period_open=("open","first"), period_close=("close","last"))
-                       .reset_index().sort_values("time")
-            )
-            if len(daily_agg) >= 1:
-                current_date = daily_agg["time"].iloc[-1]
-
-                # === DAY: last intraday price (es_30m) vs yesterday's daily close ===
-                try:
-                    lp_resp = (
-                        sb.table("es_30m")
-                          .select("time, close")
-                          .order("time", desc=True)
-                          .limit(400)
-                          .execute()
-                    )
-                    lp_df = pd.DataFrame(lp_resp.data)
-                    if not lp_df.empty and {"time","close"}.issubset(lp_df.columns):
-                        lp_df["time"] = pd.to_datetime(lp_df["time"], utc=True, errors="coerce")
-                        time_et = lp_df["time"].dt.tz_convert("US/Eastern")
-
-                        midnight = time_et.dt.floor("D")
-                        roll = (time_et.dt.hour >= 18).astype("int64")
-                        td = midnight + pd.to_timedelta(roll, unit="D")
-
-                        latest_td = td.iloc[0]  # latest due to desc order
-                        last_price = lp_df.loc[td == latest_td, "close"].iloc[0]
-
-                        da = daily_agg.copy()
-                        da["time"] = pd.to_datetime(da["time"]).dt.date
-                        prev_mask = da["time"] < latest_td.date()
-                        if prev_mask.any() and pd.notna(last_price):
-                            prev_close = da.loc[prev_mask, "period_close"].iloc[-1]
-                            if pd.notna(prev_close) and prev_close != 0:
-                                day_ret = (last_price / prev_close) - 1.0
-
-                        # === WTD / MTD / YTD: period OPEN vs the SAME last_price ===
-                        dt_series = pd.to_datetime(da["time"])
-                        curr_date = pd.Timestamp(latest_td.date())
-
-                        # YTD
-                        y_mask = dt_series.dt.year == curr_date.year
-                        if y_mask.any():
-                            y_open = da.loc[y_mask, "period_open"].iloc[0]
-                            ytd_ret = (last_price / y_open) - 1.0 if (pd.notna(y_open) and y_open != 0) else np.nan
-
-                        # MTD
-                        m_mask = (dt_series.dt.year == curr_date.year) & (dt_series.dt.month == curr_date.month)
-                        if m_mask.any():
-                            m_open = da.loc[m_mask, "period_open"].iloc[0]
-                            mtd_ret = (last_price / m_open) - 1.0 if (pd.notna(m_open) and m_open != 0) else np.nan
-
-                        # WTD (ISO week)
-                        iso_all = dt_series.dt.isocalendar()
-                        curr_iso_year, curr_iso_week, _ = curr_date.isocalendar()
-                        w_mask = (iso_all["year"] == curr_iso_year) & (iso_all["week"] == curr_iso_week)
-                        if w_mask.any():
-                            w_open = da.loc[w_mask, "period_open"].iloc[0]
-                            wtd_ret = (last_price / w_open) - 1.0 if (pd.notna(w_open) and w_open != 0) else np.nan
-                except Exception:
-                    pass  # silent per your pattern
-except Exception:
-    pass  # suppress tile warnings per your request
-
-_perf_tile(c_day,   "Day performance",   day_ret)
-_perf_tile(c_week,  "Week-to-date",      wtd_ret)
-_perf_tile(c_month, "Month-to-date",     mtd_ret)
-_perf_tile(c_year,  "Year-to-date",      ytd_ret)
-
-# -------- PLACEHOLDERS so visuals render ABOVE the filters --------
+# -------- PLACEHOLDERS so visuals render ABOVE the rest --------
 ma_placeholder = st.container()      # (2) MA snapshot here
 range_placeholder = st.container()   # (3) Current vs prior RTH range here
 
@@ -187,11 +91,6 @@ if df.empty:
 # --- Parse time + compute tz-aware trade_day (18:00 ET roll) ---
 df["time"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
 df["time_et"] = df["time"].dt.tz_convert("US/Eastern")
-
-latest_bar_time = df["time_et"].max()
-latest_trade_day_expected = (
-    latest_bar_time.floor("D") + pd.to_timedelta(int(latest_bar_time.hour >= 18), unit="D")
-)
 
 et = df["time_et"]
 midnight = et.dt.floor("D")
@@ -318,7 +217,7 @@ else:
         df.loc[mask, "lo_pLo"] = df.loc[mask, "low"] - df["pLo"]
 
 # =========================
-# Aggregate per trade_day
+# Aggregate per trade_day (18:00 ET-based)
 # =========================
 def agg_daily(scope: pd.DataFrame) -> pd.DataFrame:
     first_last = scope.groupby("trade_day").agg(
@@ -364,11 +263,74 @@ for col in ["day_range","day_volume","avg_hi_op","avg_op_lo","avg_hi_pHi","avg_l
         )
 
 # =========================
+# Compute returns with the SAME 18:00 ET roll
+# =========================
+# 1) Last intraday price within the latest trade_day
+latest_td = daily["trade_day"].max()
+latest_rows = df.loc[df["trade_day"] == latest_td]
+last_price = latest_rows["close"].iloc[-1] if not latest_rows.empty else np.nan
+
+# 2) Prior daily close & period opens from daily_es (calendar dates)
+day_ret = wtd_ret = mtd_ret = ytd_ret = np.nan
+try:
+    perf_resp = (
+        sb.table("daily_es")
+          .select("time, open, close")
+          .order("time", desc=True)
+          .limit(400)
+          .execute()
+    )
+    perf_df = pd.DataFrame(perf_resp.data)
+    if not perf_df.empty and {"time","open","close"}.issubset(perf_df.columns):
+        perf_df["time"] = pd.to_datetime(perf_df["time"]).dt.date
+        perf_df = perf_df.dropna(subset=["time","open","close"]).sort_values("time")
+
+        # Calendar date that corresponds to our trade_day (after 6pm this is "next" calendar date)
+        curr_cal_date = latest_td.date()
+
+        # Previous calendar day close (yesterday's daily close)
+        prev_mask = perf_df["time"] < curr_cal_date
+        if prev_mask.any() and pd.notna(last_price):
+            prev_close = perf_df.loc[prev_mask, "close"].iloc[-1]
+            if pd.notna(prev_close) and prev_close != 0:
+                day_ret = (last_price / prev_close) - 1.0
+
+        # Period opens vs SAME last_price
+        if pd.notna(last_price):
+            # YTD
+            y_mask = perf_df["time"].apply(lambda d: d.year == curr_cal_date.year)
+            if y_mask.any():
+                y_open = perf_df.loc[y_mask, "open"].iloc[0]
+                ytd_ret = (last_price / y_open) - 1.0 if (pd.notna(y_open) and y_open != 0) else np.nan
+
+            # MTD
+            m_mask = perf_df["time"].apply(lambda d: d.year == curr_cal_date.year and d.month == curr_cal_date.month)
+            if m_mask.any():
+                m_open = perf_df.loc[m_mask, "open"].iloc[0]
+                mtd_ret = (last_price / m_open) - 1.0 if (pd.notna(m_open) and m_open != 0) else np.nan
+
+            # WTD (ISO week)
+            curr_iso_year, curr_iso_week, _ = pd.Timestamp(curr_cal_date).isocalendar()
+            iso = perf_df["time"].apply(lambda d: pd.Timestamp(d).isocalendar())
+            w_mask = iso.apply(lambda tup: tup.year == curr_iso_year and tup.week == curr_iso_week)
+            if w_mask.any():
+                w_open = perf_df.loc[w_mask, "open"].iloc[0]
+                wtd_ret = (last_price / w_open) - 1.0 if (pd.notna(w_open) and w_open != 0) else np.nan
+except Exception:
+    pass  # keep silent per your pattern
+
+# =========================
+# Render tiles (top of page)
+# =========================
+_perf_tile(c_day,   "Day performance",   day_ret)
+_perf_tile(c_week,  "Week-to-date",      wtd_ret)
+_perf_tile(c_month, "Month-to-date",     mtd_ret)
+_perf_tile(c_year,  "Year-to-date",      ytd_ret)
+
+# =========================
 # KPI (latest day)
 # =========================
-latest_td = daily["trade_day"].max()
 row = daily.loc[daily["trade_day"] == latest_td].iloc[0]
-
 hdr = f"{SYMBOL} — Full day"
 st.subheader(hdr)
 
@@ -527,8 +489,8 @@ def _render_range_position_bar(container, current_price, prev_low, prev_high,
     """
     container.markdown(html, unsafe_allow_html=True)
 
-# Pull inputs for the bar
-current_close       = row.get("day_close", np.nan)
+# Pull inputs for the bar using the SAME 6pm-roll day as tiles
+current_price       = last_price
 session_low_cutoff  = row.get("session_low_at_cutoff", np.nan)
 session_high_cutoff = row.get("session_high_at_cutoff", np.nan)
 
@@ -557,5 +519,7 @@ except Exception:
 with range_placeholder:
     st.markdown("### Current range vs prior RTH range")
     _render_range_position_bar(
-        st, current_close, prev_rth_low, prev_rth_high, session_low_cutoff, session_high_cutoff
+        st, current_price, prev_rth_low, prev_rth_high, session_low_cutoff, session_high_cutoff
     )
+
+# (table section previously removed; file ends here)
