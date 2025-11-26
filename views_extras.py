@@ -223,6 +223,91 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     # Return filtered DF so App.py keeps your standard styling
     return dff
 
+def euro_ib_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Euro IB (Internationals) metrics, similar to SPX OR.
+    Expects boolean-ish columns:
+      - eIBH Break, eIBL Break
+      - EUR_IBH1.2_Hit, EUR_IBL1.2_Hit
+      - EUR_IBH1.5_Hit, EUR_IBL1.5_Hit
+      - EUR_IBH2_Hit,   EUR_IBL2_Hit
+      - EUR_IBH_RTH_Hit, EUR_IBL_RTH_Hit
+    Returns the (optionally filtered) DataFrame so App.py renders the table normally.
+    """
+    if df is None or df.empty:
+        return df
+
+    # If your Euro IB view has multiple sessions/windows later, you could add a sidebar filter here.
+    dff = df.copy()
+
+    # Ensure date ascending so latest is bottom (consistent with App.py)
+    date_like = None
+    for c in ["trade_date", "date", "time"]:
+        if c in dff.columns:
+            date_like = c
+            break
+    if date_like:
+        dff[date_like] = pd.to_datetime(dff[date_like], errors="coerce")
+        dff = dff.sort_values(date_like, ascending=True).reset_index(drop=True)
+
+    # Case-insensitive column resolver
+    cols_lower = {c.lower(): c for c in dff.columns}
+    def _find_col_ci(names):
+        for n in names:
+            if n.lower() in cols_lower:
+                return cols_lower[n.lower()]
+        return None
+
+    # Canonical → possible spellings
+    COLS = {
+        "eibh_break":      ["eIBH Break", "eibh_break", "eIBH_Break"],
+        "eibl_break":      ["eIBL Break", "eibl_break", "eIBL_Break"],
+        "ibh12":           ["EUR_IBH1.2_Hit", "eur_ibh1.2_hit", "eur_ibh12_hit", "eur_ibh_1_2_hit"],
+        "ibl12":           ["EUR_IBL1.2_Hit", "eur_ibl1.2_hit", "eur_ibl12_hit", "eur_ibl_1_2_hit"],
+        "ibh15":           ["EUR_IBH1.5_Hit", "eur_ibh1.5_hit", "eur_ibh15_hit", "eur_ibh_1_5_hit"],
+        "ibl15":           ["EUR_IBL1.5_Hit", "eur_ibl1.5_hit", "eur_ibl15_hit", "eur_ibl_1_5_hit"],
+        "ibh2":            ["EUR_IBH2_Hit",   "eur_ibh2_hit"],
+        "ibl2":            ["EUR_IBL2_Hit",   "eur_ibl2_hit"],
+        "ibh_rth":         ["EUR_IBH_RTH_Hit","eur_ibh_rth_hit"],
+        "ibl_rth":         ["EUR_IBL_RTH_Hit","eur_ibl_rth_hit"],
+    }
+    resolved = {k: _find_col_ci(v) for k, v in COLS.items()}
+
+    def _bool_rate(dfX, col):
+        if not col or col not in dfX:
+            return "–"
+        s = dfX[col].map(lambda v: True if str(v).strip().lower() in {"true","1","yes"} else
+                                   (False if str(v).strip().lower() in {"false","0","no"} else None))
+        s = s.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
+
+    # Top metrics
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.metric("Rows", f"{len(dff):,}")
+    with c2: st.metric("eIBH Break", _bool_rate(dff, resolved["eibh_break"]))
+    with c3: st.metric("eIBL Break", _bool_rate(dff, resolved["eibl_break"]))
+    with c4: st.metric("IBH & IBL Hits", "—")  # spacer / balance
+
+    st.markdown("#### Extension hits from Euro IB")
+    r1c1, r1c2, r1c3, r1c4, r1c5 = st.columns(5)
+    with r1c1: st.metric("IBH ≥1.2×", _bool_rate(dff, resolved["ibh12"]))
+    with r1c2: st.metric("IBL ≥1.2×", _bool_rate(dff, resolved["ibl12"]))
+    with r1c3: st.metric("IBH ≥1.5×", _bool_rate(dff, resolved["ibh15"]))
+    with r1c4: st.metric("IBL ≥1.5×", _bool_rate(dff, resolved["ibl15"]))
+    with r1c5: st.metric("IBH ≥2.0×", _bool_rate(dff, resolved["ibh2"]))
+
+    r2c1, r2c2, r2c3 = st.columns(3)
+    with r2c1: st.metric("IBL ≥2.0×", _bool_rate(dff, resolved["ibl2"]))
+    with r2c2: st.metric("IBH → RTH Hit", _bool_rate(dff, resolved["ibh_rth"]))
+    with r2c3: st.metric("IBL → RTH Hit", _bool_rate(dff, resolved["ibl_rth"]))
+
+    # Debug helper if nothing resolved
+    if not any(resolved.values()):
+        st.caption(f"🧪 Debug: Euro IB columns present → {', '.join(dff.columns)}")
+
+    return dff
+
+
 # -------------------- Compatibility stub (no-op override) --------------------
 def render_view_override(view_id: str) -> bool:
     """
