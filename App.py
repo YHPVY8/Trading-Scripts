@@ -78,30 +78,25 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# --- EURO IB: metrics + canonicalize + exact order (uses es_eur_ib_summary) ---
+# ===================== EURO IB: lock display + bypass keep_cols =====================
 if choice == "Euro IB":
-    # Show top tiles / coerce booleans (done in helper)
+    # 1) Metrics / boolean coercion (tiles) and tolerant column handling
     df = euro_ib_filter_and_metrics(df)
     if df.empty:
         st.info("No rows for Euro IB after filtering.")
         st.stop()
 
-    # Canonicalize any legacy/case variants to snake_case we will display
+    # 2) Canonicalize names to snake_case we will display
     rename_map = {
         # core levels
         "EUR_IBH": "eur_ibh", "eIBH": "eur_ibh",
         "EUR_IBL": "eur_ibl", "eIBL": "eur_ibl",
 
-        # premarket
-        "Premarket Hi": "pre_hi",
-        "Premarket Low": "pre_lo",
-        "Premarket Low ": "pre_lo",  # occasional trailing space
-
-        # breaks (keep these names to align with tiles)
+        # breaks (these feed both tiles and table)
         "eIBH Break": "eibh_break",
         "eIBL Break": "eibl_break",
 
-        # extension hits (various historic spellings)
+        # extension hits
         "EUR_IBH1.2_Hit": "eibh12_hit", "eur_ibh1.2_hit": "eibh12_hit", "eur_ibh12_hit": "eibh12_hit",
         "EUR_IBL1.2_Hit": "eibl12_hit", "eur_ibl1.2_hit": "eibl12_hit", "eur_ibl12_hit": "eibl12_hit",
         "EUR_IBH1.5_Hit": "eibh15_hit", "eur_ibh1.5_hit": "eibh15_hit", "eur_ibh15_hit": "eibh15_hit",
@@ -112,54 +107,52 @@ if choice == "Euro IB":
         # RTH hits
         "EUR_IBH_RTH_Hit": "eur_ibh_rth_hit",
         "EUR_IBL_RTH_Hit": "eur_ibl_rth_hit",
+
+        # occasional premarket aliases (we won’t display them but normalize anyway)
+        "Premarket Hi": "pre_hi",
+        "Premarket Low": "pre_lo",
+        "Premarket Low ": "pre_lo",
     }
     df = df.rename(columns={c: rename_map.get(c, c) for c in df.columns})
 
-    # Derived ranges for display (not stored in DB)
-    if {"eur_ibh", "eur_ibl"}.issubset(df.columns):
-        df["eur_ibh_range"] = (
-            pd.to_numeric(df["eur_ibh"], errors="coerce")
-            - pd.to_numeric(df["eur_ibl"], errors="coerce")
-        )
-    if {"pre_hi", "pre_lo"}.issubset(df.columns):
-        df["premarket_range"] = (
-            pd.to_numeric(df["pre_hi"], errors="coerce")
-            - pd.to_numeric(df["pre_lo"], errors="coerce")
-        )
+    # 3) Ensure 'day' exists (DB table doesn’t have it)
+    if "day" not in df.columns and "trade_date" in df.columns:
+        td = pd.to_datetime(df["trade_date"], errors="coerce")
+        df["day"] = td.dt.day_name().str[:3]  # e.g., Mon, Tue
 
-    # Drop legacy/noisy columns you don’t want
-    drop_eq = [c for c in df.columns if c.lower().strip() in {"eur_ibh=hi", "eur_ibl=lo", "op_above_eibh", "op_below_eibl"}]
-    if drop_eq:
-        df = df.drop(columns=drop_eq)
+    # 4) Drop junk columns you explicitly don’t want
+    drop_cols = {c for c in df.columns} & {"eur_ibh=hi", "eur_ibl=lo", "Op_Above_EIBH", "Op_Below_EIBL", "op_above_eibh", "op_below_eibl", "pre_hi", "pre_lo", "EUR_IB_Range", "Premarket_Range", "eur_ibh_range", "premarket_range"}
+    if drop_cols:
+        df = df.drop(columns=list(drop_cols))
 
-    # Exact order you want (eIBH/eIBL Breaks right after Premarket Range)
-    desired_order = [
-        "trade_date",
+    # 5) EXACT display set and order you requested
+    display_order = [
+        "trade_date", "day",
         "eur_ibh", "eur_ibl",
-        "pre_hi", "pre_lo",
-        "eur_ibh_range", "premarket_range",
-        "eibh_break", "eibl_break", "eIB_Break_Both",
+        "eibh_break", "eibl_break",
         "eibh12_hit", "eibl12_hit",
         "eibh15_hit", "eibl15_hit",
         "eibh20_hit", "eibl20_hit",
         "eur_ibh_rth_hit", "eur_ibl_rth_hit",
     ]
-    df = df[[c for c in desired_order if c in df.columns] +
-            [c for c in df.columns if c not in desired_order]]
+    # Keep only these (when present) and in this order
+    existing = [c for c in display_order if c in df.columns]
+    df = df[existing]
 
-    # Reformat trade_date for display
+    # 6) Format the date for the table
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# --- SPX Opening Range: filter + order columns (run once, here) ---
+    # 7) Make sure Euro-IB ignores any view-level keep list later
+    keep_cols = None
+
+# ===================== SPX Opening Range =====================
 if choice == "SPX Opening Range":
-    # Filter to selected OR window + show top metrics
     df = spx_opening_range_filter_and_metrics(df)
     if df.empty:
         st.info("No rows after applying the SPX window filter.")
         st.stop()
 
-    # Desired display order for SPX
     desired_order = [
         "trade_date", "day_of_week", "open_location", "symbol",
         "or_window", "orh", "orl", "or_range",
@@ -170,7 +163,6 @@ if choice == "SPX Opening Range":
     ]
     df = df[[c for c in desired_order if c in df.columns]]
 
-    # Reformat trade_date back to string for display
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
@@ -181,7 +173,7 @@ if "time" in df.columns:
     else:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M")
 
-# --- Restrict columns for fixed datasets ---
+# --- Restrict columns for fixed datasets (Euro-IB is already locked above) ---
 if choice == "Daily Pivots":
     keep_cols_fixed = ["date","day","hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
                        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3"]
@@ -219,8 +211,8 @@ elif choice in ["RTH Pivots", "ON Pivots"]:
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
-# --- Generic view-level subset (from YAML/DB views) ---
-if keep_cols:
+# --- Generic view-level subset (skip for Euro-IB) ---
+if keep_cols and choice != "Euro IB":
     df = df[[c for c in keep_cols if c in df.columns]]
 
 # ---- Format all numeric columns ----
@@ -349,18 +341,14 @@ HEADER_LABELS = {
         "broke_down": "Broke Down",
         "broke_both": "Broke Both",
     },
-    # --- Euro IB nice headers ---
+    # --- Euro IB headers for the columns we now display ---
     "Euro IB": {
         "trade_date": "Date",
+        "day": "Day",
         "eur_ibh": "EUR IBH",
         "eur_ibl": "EUR IBL",
-        "pre_hi": "Premarket High",
-        "pre_lo": "Premarket Low",
-        "eur_ibh_range": "IB Range",
-        "premarket_range": "Premarket Range",
         "eibh_break": "eIBH Break",
         "eibl_break": "eIBL Break",
-        "eIB_Break_Both": "Break Both eIB",
         "eibh12_hit": "IBH ≥1.2×",
         "eibl12_hit": "IBL ≥1.2×",
         "eibh15_hit": "IBH ≥1.5×",
@@ -395,6 +383,15 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
     ]
 
     # Add thick right borders for key columns (only if they exist in df)
+    THICK_BORDER_AFTER = {
+        "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "2h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "ON Pivots":  ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    }
     border_after = THICK_BORDER_AFTER.get(choice, [])
     border_after = [c for c in border_after if c in df.columns]
     nths = [df.columns.get_loc(c) + 1 for c in border_after]
