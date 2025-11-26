@@ -78,22 +78,25 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# --- EURO IB: metrics + tidy order (uses es_eur_ib_summary snake_case) ---
 # --- EURO IB: metrics + tidy order (uses es_eur_ib_summary) ---
 if choice == "Euro IB":
+    # Recompute break flags and render metrics; also drops equality flags + Op_* inside helper
     df = euro_ib_filter_and_metrics(df)
     if df.empty:
         st.info("No rows for Euro IB after filtering.")
         st.stop()
 
-    # Drop legacy equality columns if they snuck through
-    drop_eq = [c for c in df.columns if c.lower().strip() in {"eur_ibh=hi","eur_ibl=lo"}]
-    if drop_eq:
-        df = df.drop(columns=drop_eq)
+    # Belt-and-suspenders: remove Op_* and legacy equality fields if they still exist here
+    drop_cols_lower = {"op_above_eibh", "op_below_eibl", "eur_ibh=hi", "eur_ibl=lo"}
+    to_drop = [c for c in df.columns if c.lower().strip() in drop_cols_lower]
+    if to_drop:
+        df = df.drop(columns=to_drop)
 
-    # Prefer the “break” columns up front
+    # Order so eIBH/eIBL Break appear RIGHT AFTER Premarket_Range
     desired_order = [
         "trade_date", "day", "symbol",
+        "EUR_IBH", "EUR_IBL", "Premarket Hi", "Premarket Lo",
+        "EUR_IB_Range", "Premarket_Range",
         "eIBH Break", "eIBL Break", "eIB_Break_Both",
         "EUR_IBH1.2_Hit", "EUR_IBL1.2_Hit",
         "EUR_IBH1.5_Hit", "EUR_IBL1.5_Hit",
@@ -105,7 +108,6 @@ if choice == "Euro IB":
     # Reformat trade_date to string (if present) after filtering
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
 
 # --- SPX Opening Range: filter + order columns (run once, here) ---
 if choice == "SPX Opening Range":
