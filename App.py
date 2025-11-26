@@ -78,25 +78,61 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# --- EURO IB: metrics + tidy order (uses es_eur_ib_summary) ---
+# --- EURO IB: metrics + canonicalize + exact order (uses es_eur_ib_summary) ---
 if choice == "Euro IB":
+    # Show top tiles / coerce booleans (done in helper)
     df = euro_ib_filter_and_metrics(df)
     if df.empty:
         st.info("No rows for Euro IB after filtering.")
         st.stop()
 
+    # Canonicalize any legacy/case variants to snake_case we will display
+    rename_map = {
+        # core levels
+        "EUR_IBH": "eur_ibh", "eIBH": "eur_ibh",
+        "EUR_IBL": "eur_ibl", "eIBL": "eur_ibl",
+
+        # premarket
+        "Premarket Hi": "pre_hi",
+        "Premarket Low": "pre_lo",
+        "Premarket Low ": "pre_lo",  # occasional trailing space
+
+        # breaks (keep these names to align with tiles)
+        "eIBH Break": "eibh_break",
+        "eIBL Break": "eibl_break",
+
+        # extension hits (various historic spellings)
+        "EUR_IBH1.2_Hit": "eibh12_hit", "eur_ibh1.2_hit": "eibh12_hit", "eur_ibh12_hit": "eibh12_hit",
+        "EUR_IBL1.2_Hit": "eibl12_hit", "eur_ibl1.2_hit": "eibl12_hit", "eur_ibl12_hit": "eibl12_hit",
+        "EUR_IBH1.5_Hit": "eibh15_hit", "eur_ibh1.5_hit": "eibh15_hit", "eur_ibh15_hit": "eibh15_hit",
+        "EUR_IBL1.5_Hit": "eibl15_hit", "eur_ibl1.5_hit": "eibl15_hit", "eur_ibl15_hit": "eibl15_hit",
+        "EUR_IBH2_Hit":   "eibh20_hit", "eur_ibh2_hit":   "eibh20_hit",
+        "EUR_IBL2_Hit":   "eibl20_hit", "eur_ibl2_hit":   "eibl20_hit",
+
+        # RTH hits
+        "EUR_IBH_RTH_Hit": "eur_ibh_rth_hit",
+        "EUR_IBL_RTH_Hit": "eur_ibl_rth_hit",
+    }
+    df = df.rename(columns={c: rename_map.get(c, c) for c in df.columns})
+
     # Derived ranges for display (not stored in DB)
     if {"eur_ibh", "eur_ibl"}.issubset(df.columns):
-        df["eur_ibh_range"] = pd.to_numeric(df["eur_ibh"], errors="coerce") - pd.to_numeric(df["eur_ibl"], errors="coerce")
+        df["eur_ibh_range"] = (
+            pd.to_numeric(df["eur_ibh"], errors="coerce")
+            - pd.to_numeric(df["eur_ibl"], errors="coerce")
+        )
     if {"pre_hi", "pre_lo"}.issubset(df.columns):
-        df["premarket_range"] = pd.to_numeric(df["pre_hi"], errors="coerce") - pd.to_numeric(df["pre_lo"], errors="coerce")
+        df["premarket_range"] = (
+            pd.to_numeric(df["pre_hi"], errors="coerce")
+            - pd.to_numeric(df["pre_lo"], errors="coerce")
+        )
 
-    # Drop legacy equality columns (if present)
-    drop_eq = [c for c in df.columns if c.lower().strip() in {"eur_ibh=hi", "eur_ibl=lo"}]
+    # Drop legacy/noisy columns you don’t want
+    drop_eq = [c for c in df.columns if c.lower().strip() in {"eur_ibh=hi", "eur_ibl=lo", "op_above_eibh", "op_below_eibl"}]
     if drop_eq:
         df = df.drop(columns=drop_eq)
 
-    # Order so eIBH/eIBL Break appear RIGHT AFTER Premarket Range
+    # Exact order you want (eIBH/eIBL Breaks right after Premarket Range)
     desired_order = [
         "trade_date",
         "eur_ibh", "eur_ibl",
@@ -396,7 +432,7 @@ st.markdown("""
     }
     .scroll-table-container table {
         width: 100%;
-        border-collapse: collapse.
+        border-collapse: collapse;
     }
     /* Sticky header with medium-grey bg + persistent black "bottom border" */
     .scroll-table-container thead th {
