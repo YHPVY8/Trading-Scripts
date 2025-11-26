@@ -6,14 +6,12 @@ from supabase import create_client
 # import the tables/view builder
 from views_config import build_tables
 
-# import the table with price levels below the pivot "hits"
-from views_extras import render_current_levels
-
-# NEW: SPX helper (filters DF + shows metrics; keeps generic styling)
-from views_extras import spx_opening_range_filter_and_metrics
-from views_extras import render_current_levels, spx_opening_range_filter_and_metrics, euro_ib_filter_and_metrics
-
-
+# helpers for extras/metrics
+from views_extras import (
+    render_current_levels,
+    spx_opening_range_filter_and_metrics,
+    euro_ib_filter_and_metrics,
+)
 
 # ---- CONFIG ----
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
@@ -79,29 +77,53 @@ if "date" in df.columns:
 if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-# --- EURO IB: show metrics + (optional) order columns ---
+
+# --- EURO IB: metrics + tidy order (uses es_eur_ib_summary snake_case) ---
 if choice == "Euro IB":
     df = euro_ib_filter_and_metrics(df)
     if df.empty:
         st.info("No rows for Euro IB after filtering.")
         st.stop()
 
-    # Optional: place common columns first if they exist
+    # Desired display order for es_eur_ib_summary (snake_case)
     desired_order = [
         "trade_date", "day", "symbol",
-        "eIBH Break", "eIBL Break",
-        "EUR_IBH1.2_Hit", "EUR_IBL1.2_Hit",
-        "EUR_IBH1.5_Hit", "EUR_IBL1.5_Hit",
-        "EUR_IBH2_Hit",   "EUR_IBL2_Hit",
-        "EUR_IBH_RTH_Hit","EUR_IBL_RTH_Hit"
+        "eibh_break", "eibl_break", "eib_break_both",
+        "eibh12_hit", "eibl12_hit",
+        "eibh15_hit", "eibl15_hit",
+        "eibh20_hit", "eibl20_hit",
+        "eur_ibh_rth_hit", "eur_ibl_rth_hit",
     ]
     df = df[[c for c in desired_order if c in df.columns] + [c for c in df.columns if c not in desired_order]]
 
-    # Reformat trade_date to string (if present)
+    # Reformat trade_date to string (if present) after filtering
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
+# --- SPX Opening Range: filter + order columns (run once, here) ---
+if choice == "SPX Opening Range":
+    # Filter to selected OR window + show top metrics
+    df = spx_opening_range_filter_and_metrics(df)
+    if df.empty:
+        st.info("No rows after applying the SPX window filter.")
+        st.stop()
 
+    # Desired display order for SPX
+    desired_order = [
+        "trade_date", "day_of_week", "open_location", "symbol",
+        "or_window", "orh", "orl", "or_range",
+        "first_break", "broke_up", "broke_down", "broke_both",
+        "hit_20_up", "hit_20_down", "hit_50_up", "hit_50_down",
+        "hit_100_up", "hit_100_down", "max_ext_up", "max_ext_down",
+        "time_to_first_break_seconds"
+    ]
+    df = df[[c for c in desired_order if c in df.columns]]
+
+    # Reformat trade_date back to string for display
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+# --- Time formatting for intraday sets ---
 if "time" in df.columns:
     if choice in ["Daily ES", "Weekly ES"]:
         df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%d")
@@ -149,29 +171,6 @@ elif choice in ["RTH Pivots", "ON Pivots"]:
 # --- Generic view-level subset (from YAML/DB views) ---
 if keep_cols:
     df = df[[c for c in keep_cols if c in df.columns]]
-
-# --- SPX Opening Range: filter + order columns (run once, here) ---
-if choice == "SPX Opening Range":
-    # Filter to selected OR window + show top metrics
-    df = spx_opening_range_filter_and_metrics(df)
-    if df.empty:
-        st.info("No rows after applying the SPX window filter.")
-        st.stop()
-
-    # Desired display order for SPX
-    desired_order = [
-        "trade_date", "day_of_week", "open_location", "symbol",
-        "or_window", "orh", "orl", "or_range",
-        "first_break", "broke_up", "broke_down", "broke_both",
-        "hit_20_up", "hit_20_down", "hit_50_up", "hit_50_down",
-        "hit_100_up", "hit_100_down", "max_ext_up", "max_ext_down",
-        "time_to_first_break_seconds"
-    ]
-    df = df[[c for c in desired_order if c in df.columns]]
-
-    # Reformat trade_date back to string for display
-    if "trade_date" in df.columns:
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 # ---- Format all numeric columns ----
 for col in df.columns:
