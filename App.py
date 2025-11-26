@@ -77,6 +77,27 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
+# ===================== Euro IB (derive 'day' + lock order) =====================
+if choice == "Euro IB":
+    # Re-coerce to datetime to derive weekday even if we formatted above
+    if "trade_date" in df.columns and "day" not in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+        df["day"] = df["trade_date"].dt.strftime("%a")  # Mon/Tue/...
+
+    desired_euro_cols = [
+        "trade_date", "day",
+        "eur_ibh", "eur_ibl",
+        "eibh_break", "eibl_break",
+        "eibh12_hit", "eibl12_hit",
+        "eibh15_hit", "eibl15_hit",
+        "eibh20_hit", "eibl20_hit",
+        "eur_ibh_rth_hit", "eur_ibl_rth_hit",
+    ]
+    df = df[[c for c in desired_euro_cols if c in df.columns]]
+
+    # Final display format for trade_date
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 # ===================== SPX Opening Range =====================
 if choice == "SPX Opening Range":
