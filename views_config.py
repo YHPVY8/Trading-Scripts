@@ -15,15 +15,48 @@ BASE_TABLES = OrderedDict({
     "30m ES": ("es_30m", "time"),
     "2h ES": ("es_2hr", "time"),
     "4h ES": ("es_4hr", "time"),
+
     "Daily Pivots": ("es_daily_pivot_levels", "date"),
     "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
     "2h Pivots": ("es_2hr_pivot_levels", "time"),
     "4h Pivots": ("es_4hr_pivot_levels", "time"),
     "30m Pivots": ("es_30m_pivot_levels", "time"),
+
     "Range Extensions": ("es_range_extensions", "date"),
     "RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
     "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
     "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
+
+    # ---- New BASE entry: Euro IB (dict-style with keep + labels) ----
+    "Euro IB": {
+        "table": "es_eur_ib_summary",
+        "date_col": "trade_date",
+        "keep": [
+            "trade_date", "day",
+            "eur_ibh", "eur_ibl",
+            "eibh_break", "eibl_break",
+            "eibh12_hit", "eibl12_hit",
+            "eibh15_hit", "eibl15_hit",
+            "eibh20_hit", "eibl20_hit",
+            "eur_ibh_rth_hit", "eur_ibl_rth_hit",
+        ],
+        "labels": {
+            "trade_date": "Date",
+            "day": "Day",
+            "eur_ibh": "EUR IBH",
+            "eur_ibl": "EUR IBL",
+            "eibh_break": "eIBH Break",
+            "eibl_break": "eIBL Break",
+            "eibh12_hit": "IBH ≥1.2×",
+            "eibl12_hit": "IBL ≥1.2×",
+            "eibh15_hit": "IBH ≥1.5×",
+            "eibl15_hit": "IBL ≥1.5×",
+            "eibh20_hit": "IBH ≥2.0×",
+            "eibl20_hit": "IBL ≥2.0×",
+            "eur_ibh_rth_hit": "IBH → RTH Hit",
+            "eur_ibl_rth_hit": "IBL → RTH Hit",
+        },
+    },
 })
 
 def _load_yaml_views(path="views.yaml"):
