@@ -7,11 +7,16 @@ from supabase import create_client
 from views_config import build_tables
 
 # helpers for extras/metrics
+# Make the Euro IB metrics import robust so the app still runs if it isn't defined yet.
 from views_extras import (
     render_current_levels,
     spx_opening_range_filter_and_metrics,
-    render_euro_ib_metrics,  # <-- added
 )
+try:
+    from views_extras import render_euro_ib_metrics
+except Exception:
+    def render_euro_ib_metrics(df):
+        st.caption("ℹ️ Euro IB metrics unavailable (import failed). Double-check views_extras.py.")
 
 # ---- CONFIG ----
 st.set_page_config(page_title="Trading Dashboard", layout="wide")
