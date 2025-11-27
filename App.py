@@ -210,22 +210,61 @@ for col in df.columns:
         else:
             df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
 
-# -------------------- Styling (Headers + Borders + Highlights) --------------------
+# -------------------- Styling (helpers defined BEFORE use) --------------------
 def color_hits(val):
-    if val is True or str(val).lower() == "true":
+    if val is True or str(val).strip().lower() == "true":
         return "background-color: #98FB98"
     return ""
 
-THICK_BORDER_AFTER = {
-    "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "2h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    "ON Pivots":  ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-}
+def detect_bool_like_columns(df: pd.DataFrame):
+    bool_cols = []
+    for c in df.columns:
+        s = df[c]
+        if s.dtype == bool:
+            bool_cols.append(c)
+        else:
+            nonnull = s.dropna().astype(str).str.lower().unique()
+            if len(nonnull) > 0 and set(nonnull).issubset({"true", "false"}):
+                bool_cols.append(c)
+    return bool_cols
 
+def make_excelish_styler(df: pd.DataFrame, choice: str):
+    styler = df.style.hide(axis="index")
+    table_styles = [
+        {"selector": "table", "props": [("border-collapse", "collapse")]},
+        {"selector": "th, td", "props": [("border", "1px solid #E5E7EB"), ("padding", "6px 8px")]},
+        {"selector": "thead th", "props": [("font-weight", "700"), ("color", "#000")]}
+    ]
+
+    # Add thick right borders for key columns (only if they exist in df)
+    THICK_BORDER_AFTER = {
+        "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "2h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "ON Pivots":  ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+    }
+    border_after = THICK_BORDER_AFTER.get(choice, [])
+    border_after = [c for c in border_after if c in df.columns]
+    nths = [df.columns.get_loc(c) + 1 for c in border_after]
+    for n in nths:
+        table_styles.append({"selector": f"td:nth-child({n})", "props": [("border-right", "3px solid #000")]})
+        table_styles.append({"selector": f"th:nth-child({n})", "props": [("border-right", "3px solid #000")]})
+
+    styler = styler.set_table_styles(table_styles)
+
+    # Highlight ALL boolean-like cols, plus legacy hit/gt cols
+    bool_cols = detect_bool_like_columns(df)
+    hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit", "gt", ">"])]
+    highlight_cols = sorted(set(bool_cols + hit_cols))
+    if highlight_cols:
+        styler = styler.map(color_hits, subset=highlight_cols)
+
+    return styler
+
+# -------------------- Header Labels (unchanged) --------------------
 HEADER_LABELS = {
     "Daily Pivots": {
         "date": "Date", "day": "Day",
