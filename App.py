@@ -134,6 +134,15 @@ if choice == "Euro IB":
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
         df["day"] = df["trade_date"].dt.strftime("%a")  # Mon/Tue/...
 
+    # Sidebar day-of-week filter (applies before generic multi-filters)
+    # Show only days present in the loaded data (sorted M..F order if you want)
+    day_order = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    present_days = [d for d in day_order if "day" in df.columns and d in df["day"].unique()]
+    if present_days:
+        sel_days = st.sidebar.multiselect("Day (Euro IB)", options=present_days, default=present_days)
+        if sel_days:
+            df = df[df["day"].isin(sel_days)]
+
     # Lock display order
     desired_euro_cols = [
         "trade_date", "day",
