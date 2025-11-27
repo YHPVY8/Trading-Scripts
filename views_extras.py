@@ -155,7 +155,6 @@ def render_euro_ib_metrics(df: pd.DataFrame) -> None:
     # Columns we care about
     c_eibh_break = col("eibh_break")
     c_eibl_break = col("eibl_break")
-    c_eib_both   = None  # compute below
 
     c_ibh12 = col("eibh12_hit", "eur_ibh1.2_hit", "eur_ibh12_hit")
     c_ibl12 = col("eibl12_hit", "eur_ibl1.2_hit", "eur_ibl12_hit")
@@ -174,30 +173,37 @@ def render_euro_ib_metrics(df: pd.DataFrame) -> None:
         x = dff[s]
         if x.dtype == bool:
             return x.astype("boolean")
-        # handle 0/1 ints too
+        # handle 0/1 ints/floats too
         if pd.api.types.is_integer_dtype(x) or pd.api.types.is_float_dtype(x):
             return (x.astype(float) != 0.0).astype("boolean")
         return x.astype(str).str.strip().str.lower().map(
             {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
         ).astype("boolean")
 
-
     s_eibh = to_bool_series(c_eibh_break)
     s_eibl = to_bool_series(c_eibl_break)
-    s_both = (s_eibh & s_eibl).astype("boolean")
+    s_break_either = (s_eibh | s_eibl).astype("boolean")
+    s_break_both   = (s_eibh & s_eibl).astype("boolean")
+
+    s_ibh_rth = to_bool_series(c_ibh_rth)
+    s_ibl_rth = to_bool_series(c_ibl_rth)
+    s_rth_either = (s_ibh_rth | s_ibl_rth).astype("boolean")
+    s_rth_both   = (s_ibh_rth & s_ibl_rth).astype("boolean")
 
     def rate(s: pd.Series) -> str:
         s = s.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
-    # Top row: breaks
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.metric("Rows", f"{len(dff):,}")
+    # ===== Top row: Break stats =====
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1: st.metric("Days", f"{len(dff):,}")
     with c2: st.metric("% eIBH Break", rate(s_eibh))
     with c3: st.metric("% eIBL Break", rate(s_eibl))
-    with c4: st.metric("% Both eIB Break", rate(s_both))
+    with c4: st.metric("% Either eIB Break", rate(s_break_either))
+    with c5: st.metric("% Both eIB Break", rate(s_break_both))
 
-    # Second row: extension hits
+    # ===== Second row: Extension hits =====
+    st.markdown("#### Extension Hits")
     e1, e2, e3, e4, e5, e6 = st.columns(6)
     with e1: st.metric("IBH ≥1.2×", rate(to_bool_series(c_ibh12)))
     with e2: st.metric("IBL ≥1.2×", rate(to_bool_series(c_ibl12)))
@@ -206,10 +212,13 @@ def render_euro_ib_metrics(df: pd.DataFrame) -> None:
     with e5: st.metric("IBH ≥2.0×", rate(to_bool_series(c_ibh20)))
     with e6: st.metric("IBL ≥2.0×", rate(to_bool_series(c_ibl20)))
 
-    # Third row: RTH hits
-    r1, r2 = st.columns(2)
-    with r1: st.metric("IBH → RTH Hit", rate(to_bool_series(c_ibh_rth)))
-    with r2: st.metric("IBL → RTH Hit", rate(to_bool_series(c_ibl_rth)))
+    # ===== Third row: Intraday hits (packed closer together) =====
+    st.markdown("#### Intraday Hits")
+    r1, r2, r3, r4 = st.columns(4)
+    with r1: st.metric("IBH → RTH Hit", rate(s_ibh_rth))
+    with r2: st.metric("IBL → RTH Hit", rate(s_ibl_rth))
+    with r3: st.metric("% Either eIB Hit RTH", rate(s_rth_either))
+    with r4: st.metric("% Both eIB Hit RTH", rate(s_rth_both))
 
 
 
