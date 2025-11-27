@@ -127,12 +127,23 @@ for col, op, val in filters:
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
 
-# ===================== Euro IB (derive/lock AFTER filters → dynamic tiles) =====================
+# ===================== Euro IB (AFTER filters → dynamic tiles) =====================
 if choice == "Euro IB":
-    # Derive day if needed
-    if "trade_date" in df.columns and "day" not in df.columns:
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
-        df["day"] = df["trade_date"].dt.strftime("%a")  # Mon/Tue/...
+    # Prefer DB-sourced 'day'. Only derive as a fallback (and warn).
+    if "day" not in df.columns:
+        st.caption("⚠️ 'day' not found in es_eur_ib_summary — deriving from trade_date in-app.")
+        if "trade_date" in df.columns:
+            df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+            df["day"] = df["trade_date"].dt.strftime("%a")
+
+    # Day-of-week sidebar filter (now uses DB 'day')
+    day_order = ["Mon", "Tue", "Wed", "Thu", "Fri"]
+    if "day" in df.columns:
+        present_days = [d for d in day_order if d in df["day"].dropna().unique()]
+        if present_days:
+            sel_days = st.sidebar.multiselect("Day (Euro IB)", options=present_days, default=present_days)
+            if sel_days:
+                df = df[df["day"].isin(sel_days)]
 
     # Lock display order
     desired_euro_cols = [
@@ -150,8 +161,9 @@ if choice == "Euro IB":
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-    # ---- Stats header (tiles) — now dynamic with filtered df ----
+    # Dynamic tiles respect the filtered df
     render_euro_ib_metrics(df)
+
 
 # --- Time formatting for intraday sets ---
 if "time" in df.columns:
