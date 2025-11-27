@@ -137,6 +137,78 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     if lines:
         st.markdown("\n".join(f"- {ln}" for ln in lines))
 
+# --- Euro IB metrics (top-of-view header) ---
+def render_euro_ib_metrics(df: pd.DataFrame) -> None:
+    if df is None or df.empty:
+        return
+
+    dff = df.copy()
+
+    # Case-insensitive resolver
+    lower = {c.lower(): c for c in dff.columns}
+    def col(*names):
+        for n in names:
+            if n.lower() in lower:
+                return lower[n.lower()]
+        return None
+
+    # Columns we care about
+    c_eibh_break = col("eibh_break")
+    c_eibl_break = col("eibl_break")
+    c_eib_both   = None  # compute below
+
+    c_ibh12 = col("eibh12_hit", "eur_ibh1.2_hit", "eur_ibh12_hit")
+    c_ibl12 = col("eibl12_hit", "eur_ibl1.2_hit", "eur_ibl12_hit")
+    c_ibh15 = col("eibh15_hit", "eur_ibh1.5_hit", "eur_ibh15_hit")
+    c_ibl15 = col("eibl15_hit", "eur_ibl1.5_hit", "eur_ibl15_hit")
+    c_ibh20 = col("eibh20_hit", "eur_ibh2_hit")
+    c_ibl20 = col("eibl20_hit", "eur_ibl2_hit")
+
+    c_ibh_rth = col("eur_ibh_rth_hit")
+    c_ibl_rth = col("eur_ibl_rth_hit")
+
+    # Coerce booleans robustly
+    def to_bool_series(s):
+        if s is None or s not in dff:
+            return pd.Series(dtype="boolean")
+        x = dff[s]
+        if x.dtype == bool:
+            return x
+        return x.astype(str).str.strip().str.lower().map(
+            {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
+        ).astype("boolean")
+
+    s_eibh = to_bool_series(c_eibh_break)
+    s_eibl = to_bool_series(c_eibl_break)
+    s_both = (s_eibh & s_eibl).astype("boolean")
+
+    def rate(s: pd.Series) -> str:
+        s = s.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
+
+    # Top row: breaks
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.metric("Rows", f"{len(dff):,}")
+    with c2: st.metric("% eIBH Break", rate(s_eibh))
+    with c3: st.metric("% eIBL Break", rate(s_eibl))
+    with c4: st.metric("% Both eIB Break", rate(s_both))
+
+    # Second row: extension hits
+    e1, e2, e3, e4, e5, e6 = st.columns(6)
+    with e1: st.metric("IBH ≥1.2×", rate(to_bool_series(c_ibh12)))
+    with e2: st.metric("IBL ≥1.2×", rate(to_bool_series(c_ibl12)))
+    with e3: st.metric("IBH ≥1.5×", rate(to_bool_series(c_ibh15)))
+    with e4: st.metric("IBL ≥1.5×", rate(to_bool_series(c_ibl15)))
+    with e5: st.metric("IBH ≥2.0×", rate(to_bool_series(c_ibh20)))
+    with e6: st.metric("IBL ≥2.0×", rate(to_bool_series(c_ibl20)))
+
+    # Third row: RTH hits
+    r1, r2 = st.columns(2)
+    with r1: st.metric("IBH → RTH Hit", rate(to_bool_series(c_ibh_rth)))
+    with r2: st.metric("IBL → RTH Hit", rate(to_bool_series(c_ibl_rth)))
+
+
+
 # -------------------- New helpers (SPX filter + metrics) --------------------
 
 def _sb():
