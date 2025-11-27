@@ -173,10 +173,14 @@ def render_euro_ib_metrics(df: pd.DataFrame) -> None:
             return pd.Series(dtype="boolean")
         x = dff[s]
         if x.dtype == bool:
-            return x
+            return x.astype("boolean")
+        # handle 0/1 ints too
+        if pd.api.types.is_integer_dtype(x) or pd.api.types.is_float_dtype(x):
+            return (x.astype(float) != 0.0).astype("boolean")
         return x.astype(str).str.strip().str.lower().map(
             {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
         ).astype("boolean")
+
 
     s_eibh = to_bool_series(c_eibh_break)
     s_eibl = to_bool_series(c_eibl_break)
