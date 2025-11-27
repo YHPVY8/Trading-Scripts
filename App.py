@@ -10,6 +10,7 @@ from views_config import build_tables
 from views_extras import (
     render_current_levels,
     spx_opening_range_filter_and_metrics,
+    render_euro_ib_metrics,  # <-- added
 )
 
 # ---- CONFIG ----
@@ -77,7 +78,7 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# ===================== Euro IB (derive 'day' + lock order) =====================
+# ===================== Euro IB (derive 'day' + lock order + metrics) =====================
 if choice == "Euro IB":
     # Re-coerce to datetime to derive weekday even if we formatted above
     if "trade_date" in df.columns and "day" not in df.columns:
@@ -98,6 +99,9 @@ if choice == "Euro IB":
     # Final display format for trade_date
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    # ---- Stats header (tiles) ----
+    render_euro_ib_metrics(df)
 
 # ===================== SPX Opening Range =====================
 if choice == "SPX Opening Range":
