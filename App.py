@@ -83,32 +83,7 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     # SPX OR will reformat after filtering; others can format now
     df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-# ===================== Euro IB (derive 'day' + lock order + metrics) =====================
-if choice == "Euro IB":
-    # Re-coerce to datetime to derive weekday even if we formatted above
-    if "trade_date" in df.columns and "day" not in df.columns:
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
-        df["day"] = df["trade_date"].dt.strftime("%a")  # Mon/Tue/...
-
-    desired_euro_cols = [
-        "trade_date", "day",
-        "eur_ibh", "eur_ibl",
-        "eibh_break", "eibl_break",
-        "eibh12_hit", "eibl12_hit",
-        "eibh15_hit", "eibl15_hit",
-        "eibh20_hit", "eibl20_hit",
-        "eur_ibh_rth_hit", "eur_ibl_rth_hit",
-    ]
-    df = df[[c for c in desired_euro_cols if c in df.columns]]
-
-    # Final display format for trade_date
-    if "trade_date" in df.columns:
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-
-    # ---- Stats header (tiles) ----
-    render_euro_ib_metrics(df)
-
-# ===================== SPX Opening Range =====================
+# ===================== SPX Opening Range (kept BEFORE general filters) =====================
 if choice == "SPX Opening Range":
     df = spx_opening_range_filter_and_metrics(df)
     if df.empty:
@@ -127,6 +102,56 @@ if choice == "SPX Opening Range":
 
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+# ---- Multi-condition filter ----
+filters = []
+num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
+
+if st.sidebar.button("Clear Filters"):
+    st.rerun()
+
+for n in range(num_filters):
+    col = st.sidebar.selectbox(f"Column #{n+1}", df.columns, key=f"fcol{n}")
+    op = st.sidebar.selectbox(f"Op #{n+1}", ["equals","contains","greater than","less than"], key=f"fop{n}")
+    val = st.sidebar.text_input(f"Value #{n+1}", key=f"fval{n}")
+    if col and op and val:
+        filters.append((col,op,val))
+
+for col, op, val in filters:
+    if op == "equals":
+        df = df[df[col].astype(str) == val]
+    elif op == "contains":
+        df = df[df[col].astype(str).str.contains(val, case=False, na=False)]
+    elif op == "greater than":
+        df = df[pd.to_numeric(df[col], errors='coerce') > float(val)]
+    elif op == "less than":
+        df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
+
+# ===================== Euro IB (derive/lock AFTER filters → dynamic tiles) =====================
+if choice == "Euro IB":
+    # Derive day if needed
+    if "trade_date" in df.columns and "day" not in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+        df["day"] = df["trade_date"].dt.strftime("%a")  # Mon/Tue/...
+
+    # Lock display order
+    desired_euro_cols = [
+        "trade_date", "day",
+        "eur_ibh", "eur_ibl",
+        "eibh_break", "eibl_break",
+        "eibh12_hit", "eibl12_hit",
+        "eibh15_hit", "eibl15_hit",
+        "eibh20_hit", "eibl20_hit",
+        "eur_ibh_rth_hit", "eur_ibl_rth_hit",
+    ]
+    df = df[[c for c in desired_euro_cols if c in df.columns]]
+
+    # Final display format for trade_date
+    if "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+    # ---- Stats header (tiles) — now dynamic with filtered df ----
+    render_euro_ib_metrics(df)
 
 # --- Time formatting for intraday sets ---
 if "time" in df.columns:
@@ -184,30 +209,6 @@ for col in df.columns:
             df[col] = df[col].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else x)
         else:
             df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
-
-# ---- Multi-condition filter ----
-filters = []
-num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
-
-if st.sidebar.button("Clear Filters"):
-    st.rerun()
-
-for n in range(num_filters):
-    col = st.sidebar.selectbox(f"Column #{n+1}", df.columns, key=f"fcol{n}")
-    op = st.sidebar.selectbox(f"Op #{n+1}", ["equals","contains","greater than","less than"], key=f"fop{n}")
-    val = st.sidebar.text_input(f"Value #{n+1}", key=f"fval{n}")
-    if col and op and val:
-        filters.append((col,op,val))
-
-for col, op, val in filters:
-    if op == "equals":
-        df = df[df[col].astype(str) == val]
-    elif op == "contains":
-        df = df[df[col].astype(str).str.contains(val, case=False, na=False)]
-    elif op == "greater than":
-        df = df[pd.to_numeric(df[col], errors='coerce') > float(val)]
-    elif op == "less than":
-        df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
 
 # -------------------- Styling (Headers + Borders + Highlights) --------------------
 def color_hits(val):
@@ -304,56 +305,6 @@ HEADER_LABELS = {
         "broke_both": "Broke Both",
     },
 }
-
-# Detect boolean-like columns anywhere in the dataframe
-def detect_bool_like_columns(df: pd.DataFrame):
-    bool_cols = []
-    for c in df.columns:
-        s = df[c]
-        if s.dtype == bool:
-            bool_cols.append(c)
-        else:
-            nonnull = s.dropna().astype(str).str.lower().unique()
-            if len(nonnull) > 0 and set(nonnull).issubset({"true", "false"}):
-                bool_cols.append(c)
-    return bool_cols
-
-# Build the styled table
-def make_excelish_styler(df: pd.DataFrame, choice: str):
-    styler = df.style.hide(axis="index")
-    table_styles = [
-        {"selector": "table", "props": [("border-collapse", "collapse")]},
-        {"selector": "th, td", "props": [("border", "1px solid #E5E7EB"), ("padding", "6px 8px")]},
-        {"selector": "thead th", "props": [("font-weight", "700"), ("color", "#000")]}
-    ]
-
-    # Add thick right borders for key columns (only if they exist in df)
-    THICK_BORDER_AFTER = {
-        "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "2h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "4h Pivots":    ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "30m Pivots":   ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "ON Pivots":  ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-    }
-    border_after = THICK_BORDER_AFTER.get(choice, [])
-    border_after = [c for c in border_after if c in df.columns]
-    nths = [df.columns.get_loc(c) + 1 for c in border_after]
-    for n in nths:
-        table_styles.append({"selector": f"td:nth-child({n})", "props": [("border-right", "3px solid #000")]})
-        table_styles.append({"selector": f"th:nth-child({n})", "props": [("border-right", "3px solid #000")]})
-
-    styler = styler.set_table_styles(table_styles)
-
-    # Highlight ALL boolean-like cols, plus legacy hit/gt cols
-    bool_cols = detect_bool_like_columns(df)
-    hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit", "gt", ">"])]
-    highlight_cols = sorted(set(bool_cols + hit_cols))
-    if highlight_cols:
-        styler = styler.map(color_hits, subset=highlight_cols)
-
-    return styler
 
 # ---- Display (sticky header + scrollable container) ----
 styled = make_excelish_styler(df, choice)
