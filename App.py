@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+st.set_page_config(page_title="Stats", layout="wide")
+
+
 import streamlit as st
 import pandas as pd
 from supabase import create_client
