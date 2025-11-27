@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-st.set_page_config(page_title="Stats", layout="wide")
-
-
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -22,7 +19,7 @@ except Exception:
         st.caption("ℹ️ Euro IB metrics unavailable (import failed). Double-check views_extras.py.")
 
 # ---- CONFIG ----
-st.set_page_config(page_title="Trading Dashboard", layout="wide")
+st.set_page_config(page_title="Stats", layout="wide")
 
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
