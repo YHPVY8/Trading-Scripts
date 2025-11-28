@@ -258,7 +258,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         # Slightly smaller than before to remove the spare row.
         row_px    = 34   # per data row
         header_px = 36   # header row
-        fudge     = 4    # small trim to avoid overflow rendering a blank line
+        fudge     = 3    # small trim to avoid overflow rendering a blank line
         return header_px + n_rows * row_px - fudge
 
     left_height  = max(120, _df_height(len(left_df)))
