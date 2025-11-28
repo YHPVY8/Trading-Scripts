@@ -192,164 +192,126 @@ def render_euro_ib_metrics(df):
     render_block(col3, "Intraday RTH Hits", row3)
 
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
-def render_pivot_stats_compact(df, title="Stats"):
+def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Compact 2-column layout:
-      - Left column: Days, Hit Pivot, and the 'Either / Both' pairs for R0.25..R3
-      - Right column: Individual level pairs (R0.25 / S0.25, etc.)
-    Spacing fixes:
-      - 'Days' and 'Hit Pivot' rendered as single-row blocks with value inline.
-      - 'Either' vs 'Both' rendered with tight grid (column-gap: 8px).
-      - Individual level pairs rendered with tight grid (column-gap: 8px).
+    Compact 2-column stats with minimal spacing and table-like alignment.
     """
-
+    if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
+        return
     if df is None or df.empty:
         return
 
-    # ---------- helpers ----------
-    def _to_bool(s):
-        if s not in df.columns:
-            return None
-        x = df[s]
-        if x.dtype == bool:
-            return x
-        return x.astype(str).str.strip().str.lower().map(
-            {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
+    dff = df.copy()
+    cols_lower = {c.lower(): c for c in dff.columns}
+
+    def _col(name: str):
+        return cols_lower.get(name.lower())
+
+    def _to_bool(colname: str) -> pd.Series:
+        if not colname or colname not in dff:
+            return pd.Series([], dtype="boolean")
+        s = dff[colname]
+        if s.dtype == bool:
+            return s.astype("boolean")
+        return (
+            s.astype(str)
+             .str.strip()
+             .str.lower()
+             .map({
+                 "true": True, "1": True, "yes": True, "y": True,
+                 "false": False, "0": False, "no": False, "n": False
+             })
+             .astype("boolean")
         )
 
-    def _pct_from_bool(series):
-        if series is None:
-            return "–"
+    def _rate(series: pd.Series) -> str:
         s = series.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
-    def _pct_from_either(col_a, col_b):
-        a = _to_bool(col_a)
-        b = _to_bool(col_b)
-        if a is None and b is None:
-            return "–"
-        if a is None:
-            a = pd.Series(False, index=df.index)
-        if b is None:
-            b = pd.Series(False, index=df.index)
-        s = (a | b).astype("boolean").dropna()
-        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
-
-    def _pct_from_both(col_a, col_b):
-        a = _to_bool(col_a)
-        b = _to_bool(col_b)
-        if a is None or b is None:
-            return "–"
-        s = (a & b).astype("boolean").dropna()
-        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
-
-    def _pct(col):
-        return _pct_from_bool(_to_bool(col))
-
-    # ---------- compute stats ----------
-    days = len(df)
-    hit_pivot = _pct("hit_pivot")
+    days = len(dff)
+    c_hit_pivot = _col("hit_pivot")
 
     pairs = [
-        ("R0.25/S0.25", "hit_r025", "hit_s025"),
-        ("R0.5/S0.5",   "hit_r05",  "hit_s05"),
-        ("R1/S1",       "hit_r1",   "hit_s1"),
-        ("R1.5/S1.5",   "hit_r15",  "hit_s15"),
-        ("R2/S2",       "hit_r2",   "hit_s2"),
-        ("R3/S3",       "hit_r3",   "hit_s3"),
+        ("R0.25/S0.25", _col("hit_r025"), _col("hit_s025"), "R0.25", "S0.25"),
+        ("R0.5/S0.5",   _col("hit_r05"),  _col("hit_s05"),  "R0.5",  "S0.5"),
+        ("R1/S1",       _col("hit_r1"),   _col("hit_s1"),   "R1",    "S1"),
+        ("R1.5/S1.5",   _col("hit_r15"),  _col("hit_s15"),  "R1.5",  "S1.5"),
+        ("R2/S2",       _col("hit_r2"),   _col("hit_s2"),   "R2",    "S2"),
+        ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # Left column rows: Days, Hit Pivot, plus Either/Both lines
-    left_rows = []
-    left_rows.append(("single", "Days", f"{days:,}", None))
-    left_rows.append(("single", "Hit Pivot", hit_pivot, None))
-    for label, r_col, s_col in pairs:
-        left_rows.append(("pair", f"{label} Either", _pct_from_either(r_col, s_col),
-                          ("Both", _pct_from_both(r_col, s_col))))
-
-    # Right column rows: individual R/S on one line
-    right_rows = []
-    for label, r_col, s_col in pairs:
-        right_rows.append(("pair", label.replace(" ", "") + " Levels",
-                           f"R: {_pct(r_col)}", ("S", _pct(s_col))))
-
-    # ---------- layout: two Streamlit columns (closer than default) ----------
-    # tweak the ratios to bring them closer; increase left a bit to reduce perceived gutter
-    col_left, col_right = st.columns([1.18, 0.82])
-
-    # ---------- tiny CSS to tighten spacing ----------
+    # --- CSS to tighten spacing ---
     st.markdown("""
         <style>
-        /* compact row with inline value (Days / Hit Pivot) */
-        .pv-row-single {
-            display: inline-flex;
-            align-items: baseline;
-            gap: 6px;                 /* value sits right next to label */
-            padding: 2px 0;           /* tight vertical spacing */
-            border-bottom: 1px solid #eee;
+        .pivot-row { 
+            display:flex; 
+            justify-content:space-between; 
+            padding:2px 0;
+            margin:0;
+            font-size:0.9rem;
         }
-        .pv-row-single strong {
-            font-weight: 600;
+        .pivot-row div { 
+            flex:1;
         }
-
-        /* compact two-cell row (Either | Both) or (R: | S:) */
-        .pv-row-pair {
-            display: grid;
-            grid-template-columns: auto auto; /* two tight cells */
-            column-gap: 8px;                  /* ≈ one "tab" */
-            align-items: baseline;
-            padding: 2px 0;                   /* tight vertical spacing */
-            border-bottom: 1px solid #eee;
-        }
-        .pv-leftcell { font-weight: 600; }
-        .pv-rightcell { text-align: right; }
+        .pivot-col { padding-right:12px; }
         </style>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True
+    )
 
-    def _render_single(col, label, value):
-        with col:
+    left, right = st.columns([1, 1])
+
+    # ---- LEFT PANEL ----
+    with left:
+        st.subheader("Pivot & Pair Hits")
+
+        # DAYS
+        st.markdown(
+            f"<div class='pivot-row'><div><strong>Days:</strong></div><div>{days:,}</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # Hit Pivot
+        if c_hit_pivot:
             st.markdown(
-                f"""
-                <div class="pv-row-single">
-                    <div><strong>{label}:</strong></div>
-                    <div>{value}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+                f"<div class='pivot-row'><div><strong>Hit Pivot:</strong></div><div>{_rate(_to_bool(c_hit_pivot))}</div></div>",
+                unsafe_allow_html=True
             )
 
-    def _render_pair(col, left_label, left_value, right_pair):
-        """
-        left_label + left_value in the first tight cell,
-        right_pair is a tuple: (right_label, right_value)
-        """
-        r_lbl, r_val = right_pair if isinstance(right_pair, tuple) else ("", "")
-        with col:
+        # Pair (Either | Both)
+        for label, rcol, scol, _, _ in pairs:
+            sr = _to_bool(rcol)
+            ss = _to_bool(scol)
+            either = _rate(sr | ss)
+            both   = _rate(sr & ss)
+
             st.markdown(
                 f"""
-                <div class="pv-row-pair">
-                    <div class="pv-leftcell">{left_label}:</div>
-                    <div>{left_value}</div>
-                    <div class="pv-leftcell">{r_lbl}:</div>
-                    <div class="pv-rightcell">{r_val}</div>
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{label} Either:</strong> {either}</div>
+                    <div><strong>Both:</strong> {both}</div>
                 </div>
                 """,
-                unsafe_allow_html=True,
+                unsafe_allow_html=True
             )
 
-    # ---------- render ----------
-    with col_left:
-        st.markdown(f"### {title}")
-        for kind, a, b, c in left_rows:
-            if kind == "single":
-                _render_single(col_left, a, b)
-            else:
-                _render_pair(col_left, a, b, c)
+    # ---- RIGHT PANEL ----
+    with right:
+        st.subheader("Individual Levels")
 
-    with col_right:
-        st.markdown("### Individual Levels")
-        for kind, a, b, c in right_rows:
-            _render_pair(col_right, a.replace("Levels","").strip(), b, c)
+        for _, rcol, scol, rname, sname in pairs:
+            r_rate = _rate(_to_bool(rcol)) if rcol else "–"
+            s_rate = _rate(_to_bool(scol)) if scol else "–"
+
+            st.markdown(
+                f"""
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{rname}:</strong> {r_rate}</div>
+                    <div><strong>{sname}:</strong> {s_rate}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
 
