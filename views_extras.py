@@ -194,8 +194,8 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Compact, predictable layout using tables (no HTML/CSS).
-    Left: Pair/Either/Both (with Days & Hit Pivot in 'Either' and blank 'Both')
+    Compact, predictable layout using st.dataframe (no HTML/CSS).
+    Left: Pair/Either/Both (Days & Hit Pivot show value in 'Either'; 'Both' blank)
     Right: Individual Levels (R | S)
     """
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
@@ -262,14 +262,39 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
 
     right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
 
-    # ===== Render side-by-side (tables keep things tight & aligned) =====
+    # Heuristics to keep dataframes compact (no full-width stretch)
+    left_height  = max(140, int(28 * (len(left_df) + 1)))
+    right_height = max(140, int(28 * (len(right_df) + 1)))
+
     left, right = st.columns([1, 1])
+
     with left:
         st.subheader("Pivot & Pair Hits")
-        st.table(left_df.style.hide(axis="index"))
+        st.dataframe(
+            left_df,
+            hide_index=True,
+            use_container_width=False,  # IMPORTANT: keeps it narrow
+            height=left_height,
+            column_config={
+                "Pair":   st.column_config.TextColumn("Pair", width=220),
+                "Either": st.column_config.TextColumn("Either", width=90),
+                "Both":   st.column_config.TextColumn("Both", width=90),
+            },
+        )
+
     with right:
         st.subheader("Individual Levels")
-        st.table(right_df.style.hide(axis="index"))
+        st.dataframe(
+            right_df,
+            hide_index=True,
+            use_container_width=False,  # IMPORTANT: keeps it narrow
+            height=right_height,
+            column_config={
+                "Level": st.column_config.TextColumn("Level", width=160),
+                "R":     st.column_config.TextColumn("R", width=90),
+                "S":     st.column_config.TextColumn("S", width=90),
+            },
+        )
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
 
