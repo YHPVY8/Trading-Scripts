@@ -138,87 +138,58 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
         st.markdown("\n".join(f"- {ln}" for ln in lines))
 
 # --- Euro IB metrics (top-of-view header) ---
-def render_euro_ib_metrics(df: pd.DataFrame) -> None:
-    if df is None or df.empty:
-        return
+def render_euro_ib_metrics(df):
+    """Render Euro-IB stats in a 3-column vertical layout."""
 
-    dff = df.copy()
+    # --- Compute all probabilities dynamically ---
+    days = len(df)
 
-    # Case-insensitive resolver
-    lower = {c.lower(): c for c in dff.columns}
-    def col(*names):
-        for n in names:
-            if n.lower() in lower:
-                return lower[n.lower()]
-        return None
+    pct = lambda x: f"{(x / days * 100):.1f}%" if days > 0 else "0.0%"
 
-    # Columns we care about
-    c_eibh_break = col("eibh_break")
-    c_eibl_break = col("eibl_break")
+    # ROW 1 (Break Stats)
+    row1 = {
+        "Days": days,
+        "% eIBH Break": pct(df["eibh_break"].sum()),
+        "% eIBL Break": pct(df["eibl_break"].sum()),
+        "% Either Break": pct((df["eibh_break"] | df["eibl_break"]).sum()),
+        "% Both Break": pct((df["eibh_break"] & df["eibl_break"]).sum()),
+    }
 
-    c_ibh12 = col("eibh12_hit", "eur_ibh1.2_hit", "eur_ibh12_hit")
-    c_ibl12 = col("eibl12_hit", "eur_ibl1.2_hit", "eur_ibl12_hit")
-    c_ibh15 = col("eibh15_hit", "eur_ibh1.5_hit", "eur_ibh15_hit")
-    c_ibl15 = col("eibl15_hit", "eur_ibl1.5_hit", "eur_ibl15_hit")
-    c_ibh20 = col("eibh20_hit", "eur_ibh2_hit")
-    c_ibl20 = col("eibl20_hit", "eur_ibl2_hit")
+    # ROW 2 (Extension Hits)
+    row2 = {
+        "% 1.2× Hit": pct(df[["eibh12_hit","eibl12_hit"]].any(axis=1).sum()),
+        "% 1.5× Hit": pct(df[["eibh15_hit","eibl15_hit"]].any(axis=1).sum()),
+        "% 2.0× Hit": pct(df[["eibh20_hit","eibl20_hit"]].any(axis=1).sum()),
+    }
 
-    c_ibh_rth = col("eur_ibh_rth_hit")
-    c_ibl_rth = col("eur_ibl_rth_hit")
+    # ROW 3 (RTH Intraday Hits)
+    row3 = {
+        "% IBH Hit RTH": pct(df["eur_ibh_rth_hit"].sum()),
+        "% IBL Hit RTH": pct(df["eur_ibl_rth_hit"].sum()),
+        "% Either Hit RTH": pct((df["eur_ibh_rth_hit"] | df["eur_ibl_rth_hit"]).sum()),
+        "% Both Hit RTH": pct((df["eur_ibh_rth_hit"] & df["eur_ibl_rth_hit"]).sum()),
+    }
 
-    # Coerce booleans robustly
-    def to_bool_series(s):
-        if s is None or s not in dff:
-            return pd.Series(dtype="boolean")
-        x = dff[s]
-        if x.dtype == bool:
-            return x.astype("boolean")
-        # handle 0/1 ints/floats too
-        if pd.api.types.is_integer_dtype(x) or pd.api.types.is_float_dtype(x):
-            return (x.astype(float) != 0.0).astype("boolean")
-        return x.astype(str).str.strip().str.lower().map(
-            {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
-        ).astype("boolean")
+    # --- DISPLAY AS THREE COLUMNS ---
+    col1, col2, col3 = st.columns(3)
 
-    s_eibh = to_bool_series(c_eibh_break)
-    s_eibl = to_bool_series(c_eibl_break)
-    s_break_either = (s_eibh | s_eibl).astype("boolean")
-    s_break_both   = (s_eibh & s_eibl).astype("boolean")
+    def render_block(col, title, data_dict):
+        with col:
+            st.markdown(f"### {title}")
+            for k, v in data_dict.items():
+                st.markdown(
+                    f"""
+                    <div style='padding:4px 0; margin-bottom:2px;
+                                border-bottom:1px solid #ddd;'>
+                        <strong>{k}:</strong> {v}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-    s_ibh_rth = to_bool_series(c_ibh_rth)
-    s_ibl_rth = to_bool_series(c_ibl_rth)
-    s_rth_either = (s_ibh_rth | s_ibl_rth).astype("boolean")
-    s_rth_both   = (s_ibh_rth & s_ibl_rth).astype("boolean")
-
-    def rate(s: pd.Series) -> str:
-        s = s.dropna()
-        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
-
-    # ===== Top row: Break stats =====
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: st.metric("Days", f"{len(dff):,}")
-    with c2: st.metric("% eIBH Break", rate(s_eibh))
-    with c3: st.metric("% eIBL Break", rate(s_eibl))
-    with c4: st.metric("% Either eIB Break", rate(s_break_either))
-    with c5: st.metric("% Both eIB Break", rate(s_break_both))
-
-    # ===== Second row: Extension hits =====
-    st.markdown("#### Extension Hits")
-    e1, e2, e3, e4, e5, e6 = st.columns(6)
-    with e1: st.metric("IBH ≥1.2×", rate(to_bool_series(c_ibh12)))
-    with e2: st.metric("IBL ≥1.2×", rate(to_bool_series(c_ibl12)))
-    with e3: st.metric("IBH ≥1.5×", rate(to_bool_series(c_ibh15)))
-    with e4: st.metric("IBL ≥1.5×", rate(to_bool_series(c_ibl15)))
-    with e5: st.metric("IBH ≥2.0×", rate(to_bool_series(c_ibh20)))
-    with e6: st.metric("IBL ≥2.0×", rate(to_bool_series(c_ibl20)))
-
-    # ===== Third row: Intraday hits (packed closer together) =====
-    st.markdown("#### Intraday Hits")
-    r1, r2, r3, r4 = st.columns(4)
-    with r1: st.metric("IBH → RTH Hit", rate(s_ibh_rth))
-    with r2: st.metric("IBL → RTH Hit", rate(s_ibl_rth))
-    with r3: st.metric("% Either eIB Hit RTH", rate(s_rth_either))
-    with r4: st.metric("% Both eIB Hit RTH", rate(s_rth_both))
+    render_block(col1, "Break Statistics", row1)
+    render_block(col2, "Extension Hits", row2)
+    render_block(col3, "Intraday RTH Hits", row3)
 
 
 
