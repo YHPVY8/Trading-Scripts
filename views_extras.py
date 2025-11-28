@@ -137,11 +137,13 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     if lines:
         st.markdown("\n".join(f"- {ln}" for ln in lines))
 
-# --- Euro IB metrics (kept unchanged) ---
+# --- Euro IB metrics (top-of-view header) ---
 def render_euro_ib_metrics(df):
     """Render Euro-IB stats in a 3-column vertical layout."""
+
     # --- Compute all probabilities dynamically ---
     days = len(df)
+
     pct = lambda x: f"{(x / days * 100):.1f}%" if days > 0 else "0.0%"
 
     # ROW 1 (Break Stats)
@@ -189,28 +191,29 @@ def render_euro_ib_metrics(df):
     render_block(col2, "Extension Hits", row2)
     render_block(col3, "Intraday RTH Hits", row3)
 
-# --- Pivot tables (Daily / RTH / ON) dynamic stats (UPDATED layout) -----------
-def render_pivot_stats_compact(df, title="Pivot & Pair Hits"):
+# --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
+def render_pivot_stats_compact(df, title="Stats"):
     """
-    Compact, tight two-column layout:
-      - Left: Days, Hit Pivot, and the 'Either / Both' pairs for R0.25..R3
-      - Right: Individual level pairs (R0.25/S0.25 .. R3/S3)
+    Compact 2-column layout:
+      - Left column: Days, Hit Pivot, and the 'Either / Both' pairs for R0.25..R3
+      - Right column: Individual level pairs (R0.25 / S0.25, etc.)
     Spacing fixes:
-      - Days/Hit Pivot render inline and never wrap to another cell.
-      - The two big columns are placed much closer via a CSS grid with a small column-gap.
-      - Pair rows render in a single 4-cell line to avoid wrapping.
+      - 'Days' and 'Hit Pivot' rendered as single-row blocks with value inline.
+      - 'Either' vs 'Both' rendered with tight grid (column-gap: 8px).
+      - Individual level pairs rendered with tight grid (column-gap: 8px).
     """
+
     if df is None or df.empty:
         return
 
     # ---------- helpers ----------
-    def _to_bool(col):
-        if col not in df.columns:
+    def _to_bool(s):
+        if s not in df.columns:
             return None
-        s = df[col]
-        if s.dtype == bool:
-            return s
-        return s.astype(str).str.strip().str.lower().map(
+        x = df[s]
+        if x.dtype == bool:
+            return x
+        return x.astype(str).str.strip().str.lower().map(
             {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
         )
 
@@ -220,8 +223,9 @@ def render_pivot_stats_compact(df, title="Pivot & Pair Hits"):
         s = series.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
-    def _pct_from_either(a_col, b_col):
-        a, b = _to_bool(a_col), _to_bool(b_col)
+    def _pct_from_either(col_a, col_b):
+        a = _to_bool(col_a)
+        b = _to_bool(col_b)
         if a is None and b is None:
             return "–"
         if a is None:
@@ -231,8 +235,9 @@ def render_pivot_stats_compact(df, title="Pivot & Pair Hits"):
         s = (a | b).astype("boolean").dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
-    def _pct_from_both(a_col, b_col):
-        a, b = _to_bool(a_col), _to_bool(b_col)
+    def _pct_from_both(col_a, col_b):
+        a = _to_bool(col_a)
+        b = _to_bool(col_b)
         if a is None or b is None:
             return "–"
         s = (a & b).astype("boolean").dropna()
@@ -241,7 +246,7 @@ def render_pivot_stats_compact(df, title="Pivot & Pair Hits"):
     def _pct(col):
         return _pct_from_bool(_to_bool(col))
 
-    # ---------- compute ----------
+    # ---------- compute stats ----------
     days = len(df)
     hit_pivot = _pct("hit_pivot")
 
@@ -254,102 +259,100 @@ def render_pivot_stats_compact(df, title="Pivot & Pair Hits"):
         ("R3/S3",       "hit_r3",   "hit_s3"),
     ]
 
+    # Left column rows: Days, Hit Pivot, plus Either/Both lines
     left_rows = []
     left_rows.append(("single", "Days", f"{days:,}", None))
     left_rows.append(("single", "Hit Pivot", hit_pivot, None))
-    for label, r, s in pairs:
-        left_rows.append(("pair", f"{label} Either", _pct_from_either(r, s),
-                          ("Both", _pct_from_both(r, s))))
+    for label, r_col, s_col in pairs:
+        left_rows.append(("pair", f"{label} Either", _pct_from_either(r_col, s_col),
+                          ("Both", _pct_from_both(r_col, s_col))))
 
+    # Right column rows: individual R/S on one line
     right_rows = []
-    for label, r, s in pairs:
-        right_rows.append(
-            ("pair", label.replace(" ", ""), f"R: {_pct(r)}", ("S", _pct(s)))
-        )
+    for label, r_col, s_col in pairs:
+        right_rows.append(("pair", label.replace(" ", "") + " Levels",
+                           f"R: {_pct(r_col)}", ("S", _pct(s_col))))
 
-    # ---------- CSS / layout (tight two-column grid) ----------
+    # ---------- layout: two Streamlit columns (closer than default) ----------
+    # tweak the ratios to bring them closer; increase left a bit to reduce perceived gutter
+    col_left, col_right = st.columns([1.18, 0.82])
+
+    # ---------- tiny CSS to tighten spacing ----------
     st.markdown("""
         <style>
-          /* wrapper: two columns with tight gap */
-          .pv-wrap {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            column-gap: 14px;     /* <<< bring the columns much closer */
-            row-gap: 0.5rem;
-            margin: 0.25rem 0 0.5rem 0;
-          }
-
-          /* headings */
-          .pv-h3 { font-size: 1.15rem; font-weight: 700; margin: 0.25rem 0 0.5rem 0; }
-
-          /* "Days" and "Hit Pivot" -> single-row, two cells (label | value) */
-          .pv-line {
-            display: grid;
-            grid-template-columns: auto 1fr;  /* label then value, no wrap */
+        /* compact row with inline value (Days / Hit Pivot) */
+        .pv-row-single {
+            display: inline-flex;
             align-items: baseline;
-            column-gap: 8px;
-            padding: 2px 0;
+            gap: 6px;                 /* value sits right next to label */
+            padding: 2px 0;           /* tight vertical spacing */
             border-bottom: 1px solid #eee;
-          }
-          .pv-label { font-weight: 600; }
+        }
+        .pv-row-single strong {
+            font-weight: 600;
+        }
 
-          /* pair rows -> one row, four cells: (left_label | left_value | right_label | right_value) */
-          .pv-row-4 {
+        /* compact two-cell row (Either | Both) or (R: | S:) */
+        .pv-row-pair {
             display: grid;
-            grid-template-columns: auto 1fr auto 1fr;  /* stays on one line */
-            column-gap: 8px;
+            grid-template-columns: auto auto; /* two tight cells */
+            column-gap: 8px;                  /* ≈ one "tab" */
             align-items: baseline;
-            padding: 2px 0;
+            padding: 2px 0;                   /* tight vertical spacing */
             border-bottom: 1px solid #eee;
-          }
-          .pv-rval, .pv-sval, .pv-bothval { text-align: right; }
+        }
+        .pv-leftcell { font-weight: 600; }
+        .pv-rightcell { text-align: right; }
         </style>
     """, unsafe_allow_html=True)
 
-    # ---------- HTML builders ----------
-    def _html_left():
-        parts = ['<div>','<div class="pv-h3">%s</div>' % title]
+    def _render_single(col, label, value):
+        with col:
+            st.markdown(
+                f"""
+                <div class="pv-row-single">
+                    <div><strong>{label}:</strong></div>
+                    <div>{value}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    def _render_pair(col, left_label, left_value, right_pair):
+        """
+        left_label + left_value in the first tight cell,
+        right_pair is a tuple: (right_label, right_value)
+        """
+        r_lbl, r_val = right_pair if isinstance(right_pair, tuple) else ("", "")
+        with col:
+            st.markdown(
+                f"""
+                <div class="pv-row-pair">
+                    <div class="pv-leftcell">{left_label}:</div>
+                    <div>{left_value}</div>
+                    <div class="pv-leftcell">{r_lbl}:</div>
+                    <div class="pv-rightcell">{r_val}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    # ---------- render ----------
+    with col_left:
+        st.markdown(f"### {title}")
         for kind, a, b, c in left_rows:
             if kind == "single":
-                parts.append(
-                    f'<div class="pv-line"><div class="pv-label">{a}:</div><div>{b}</div></div>'
-                )
+                _render_single(col_left, a, b)
             else:
-                r_lbl, r_val = c if isinstance(c, tuple) else ("", "")
-                parts.append(
-                    f'''
-                    <div class="pv-row-4">
-                      <div class="pv-label">{a}:</div><div class="pv-rval">{b}</div>
-                      <div class="pv-label">{r_lbl}:</div><div class="pv-bothval">{r_val}</div>
-                    </div>
-                    '''
-                )
-        parts.append('</div>')
-        return "\n".join(parts)
+                _render_pair(col_left, a, b, c)
 
-    def _html_right():
-        parts = ['<div>','<div class="pv-h3">Individual Levels</div>']
-        for _, a, b, c in right_rows:
-            r_lbl, r_val = c
-            parts.append(
-                f'''
-                <div class="pv-row-4">
-                  <div class="pv-label">{a}:</div><div class="pv-rval">{b}</div>
-                  <div class="pv-label">{r_lbl}:</div><div class="pv-sval">{r_val}</div>
-                </div>
-                '''
-            )
-        parts.append('</div>')
-        return "\n".join(parts)
-
-    st.markdown(f"""
-        <div class="pv-wrap">
-          {_html_left()}
-          {_html_right()}
-        </div>
-    """, unsafe_allow_html=True)
+    with col_right:
+        st.markdown("### Individual Levels")
+        for kind, a, b, c in right_rows:
+            _render_pair(col_right, a.replace("Levels","").strip(), b, c)
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
+
 def _sb():
     """Local Supabase client using Streamlit secrets."""
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
