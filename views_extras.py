@@ -35,7 +35,7 @@ def render_spx_or_extras(choice: str, table_name: str, df: pd.DataFrame | None):
         return
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Rows", f"{len(df):,}")
-    if "broke_up"   in df: c2.metric("Broke Up",   f"{100*pd.to_numeric(df['broke_up'],   errors='coerce').mean():.1f}%")
+    if "broke_up" in df:   c2.metric("Broke Up",   f"{100*pd.to_numeric(df['broke_up'], errors='coerce').mean():.1f}%")
     if "broke_down" in df: c3.metric("Broke Down", f"{100*pd.to_numeric(df['broke_down'], errors='coerce').mean():.1f}%")
     if "broke_both" in df: c4.metric("Broke Both", f"{100*pd.to_numeric(df['broke_both'], errors='coerce').mean():.1f}%")
 
@@ -49,14 +49,16 @@ def _first_present(rec, keys):
     return None
 
 def _first_existing_datecol(rec: dict, preferred: str):
+    # prefer the passed-in date_col; if missing, try common fallbacks
     candidates = [preferred, "trade_date", "date", "time"]
     for c in candidates:
         if c in rec:
             return c
-    return preferred
+    return preferred  # last resort; request will still have 1 row
 
 def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
     try:
+        # Get latest row with all columns to avoid case/quote issues
         resp = (
             sb.table(table_name)
               .select("*")
@@ -69,6 +71,7 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
             return {}
         rec = rows[0]
 
+        # If the chosen date_col wasn't actually present, try again ordering by a fallback
         if date_col not in rec:
             fallback = _first_existing_datecol(rec, date_col)
             if fallback != date_col:
@@ -100,12 +103,14 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     norm = _normalize_table_name(table_name)
     is_pivot = (norm in PIVOT_TABLES) or norm.endswith("_pivot_levels")
     if not is_pivot:
+        # Small diagnostic so you know why nothing prints
         st.caption(f"ℹ️ Skipping levels (table '{table_name}' not recognized as a pivot-level table).")
         return
 
     levels = fetch_current_levels(sb, table_name, date_col)
 
     if not any(levels.values()):
+        # Show what keys were present in the latest record to help diagnose column-name mismatches
         try:
             probe = (
                 sb.table(table_name)
@@ -135,9 +140,13 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
 # --- Euro IB metrics (top-of-view header) ---
 def render_euro_ib_metrics(df):
     """Render Euro-IB stats in a 3-column vertical layout."""
+
+    # --- Compute all probabilities dynamically ---
     days = len(df)
+
     pct = lambda x: f"{(x / days * 100):.1f}%" if days > 0 else "0.0%"
 
+    # ROW 1 (Break Stats)
     row1 = {
         "Days": days,
         "% eIBH Break": pct(df["eibh_break"].sum()),
@@ -146,12 +155,14 @@ def render_euro_ib_metrics(df):
         "% Both Break": pct((df["eibh_break"] & df["eibl_break"]).sum()),
     }
 
+    # ROW 2 (Extension Hits)
     row2 = {
         "% 1.2× Hit": pct(df[["eibh12_hit","eibl12_hit"]].any(axis=1).sum()),
         "% 1.5× Hit": pct(df[["eibh15_hit","eibl15_hit"]].any(axis=1).sum()),
         "% 2.0× Hit": pct(df[["eibh20_hit","eibl20_hit"]].any(axis=1).sum()),
     }
 
+    # ROW 3 (RTH Intraday Hits)
     row3 = {
         "% IBH Hit RTH": pct(df["eur_ibh_rth_hit"].sum()),
         "% IBL Hit RTH": pct(df["eur_ibl_rth_hit"].sum()),
@@ -159,6 +170,7 @@ def render_euro_ib_metrics(df):
         "% Both Hit RTH": pct((df["eur_ibh_rth_hit"] & df["eur_ibl_rth_hit"]).sum()),
     }
 
+    # --- DISPLAY AS THREE COLUMNS ---
     col1, col2, col3 = st.columns(3)
 
     def render_block(col, title, data_dict):
@@ -167,7 +179,8 @@ def render_euro_ib_metrics(df):
             for k, v in data_dict.items():
                 st.markdown(
                     f"""
-                    <div style='padding:4px 0; margin-bottom:2px; border-bottom:1px solid #ddd;'>
+                    <div style='padding:4px 0; margin-bottom:2px;
+                                border-bottom:1px solid #ddd;'>
                         <strong>{k}:</strong> {v}
                     </div>
                     """,
@@ -181,9 +194,7 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Compact two-column stats using Streamlit-only columns (no HTML/CSS).
-    - Left: Days, Hit Pivot, and Pair 'Either | Both' rows
-    - Right: Individual levels 'R | S' rows
+    Compact 2-column stats with minimal spacing and table-like alignment.
     """
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
@@ -203,10 +214,14 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         if s.dtype == bool:
             return s.astype("boolean")
         return (
-            s.astype(str).str.strip().str.lower().map({
-                "true": True, "1": True, "yes": True, "y": True,
-                "false": False, "0": False, "no": False, "n": False
-            }).astype("boolean")
+            s.astype(str)
+             .str.strip()
+             .str.lower()
+             .map({
+                 "true": True, "1": True, "yes": True, "y": True,
+                 "false": False, "0": False, "no": False, "n": False
+             })
+             .astype("boolean")
         )
 
     def _rate(series: pd.Series) -> str:
@@ -225,54 +240,81 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # --- Two main panels (Streamlit-native) ---
-    # Tip: Streamlit doesn't expose gutter control; this keeps things tidy without HTML.
+    # --- CSS to tighten spacing ---
+    st.markdown("""
+        <style>
+        .pivot-row { 
+            display:flex; 
+            justify-content:space-between; 
+            padding:2px 0;
+            margin:0;
+            font-size:0.9rem;
+        }
+        .pivot-row div { 
+            flex:1;
+        }
+        .pivot-col { padding-right:12px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
     left, right = st.columns([1, 1])
 
-    # ===== LEFT PANEL =====
+    # ---- LEFT PANEL ----
     with left:
         st.subheader("Pivot & Pair Hits")
 
-        # Days (inline: label | value)
-        c1, c2 = st.columns([0.65, 0.35])
-        c1.markdown("**Days:**")
-        c2.markdown(f"{days:,}")
+        # DAYS
+        st.markdown(
+            f"<div class='pivot-row'><div><strong>Days:</strong></div><div>{days:,}</div></div>",
+            unsafe_allow_html=True
+        )
 
-        # Hit Pivot (inline: label | value)
+        # Hit Pivot
         if c_hit_pivot:
-            c1, c2 = st.columns([0.65, 0.35])
-            c1.markdown("**Hit Pivot:**")
-            c2.markdown(_rate(_to_bool(c_hit_pivot)))
+            st.markdown(
+                f"<div class='pivot-row'><div><strong>Hit Pivot:</strong></div><div>{_rate(_to_bool(c_hit_pivot))}</div></div>",
+                unsafe_allow_html=True
+            )
 
-        # Pair rows (inline: label | value | Both | value)
+        # Pair (Either | Both)
         for label, rcol, scol, _, _ in pairs:
             sr = _to_bool(rcol)
             ss = _to_bool(scol)
             either = _rate(sr | ss)
             both   = _rate(sr & ss)
 
-            c1, c2, c3, c4 = st.columns([0.62, 0.18, 0.12, 0.08])
-            c1.markdown(f"**{label} Either:**")
-            c2.markdown(either)
-            c3.markdown("**Both:**")
-            c4.markdown(both)
+            st.markdown(
+                f"""
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{label} Either:</strong> {either}</div>
+                    <div><strong>Both:</strong> {both}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-    # ===== RIGHT PANEL =====
+    # ---- RIGHT PANEL ----
     with right:
         st.subheader("Individual Levels")
 
-        # Each row: R label | R value | S label | S value
         for _, rcol, scol, rname, sname in pairs:
             r_rate = _rate(_to_bool(rcol)) if rcol else "–"
             s_rate = _rate(_to_bool(scol)) if scol else "–"
 
-            c1, c2, c3, c4 = st.columns([0.40, 0.20, 0.30, 0.10])
-            c1.markdown(f"**{rname}:**")
-            c2.markdown(r_rate)
-            c3.markdown(f"**{sname}:**")
-            c4.markdown(s_rate)
+            st.markdown(
+                f"""
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{rname}:</strong> {r_rate}</div>
+                    <div><strong>{sname}:</strong> {s_rate}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
+
 def _sb():
     """Local Supabase client using Streamlit secrets."""
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -289,13 +331,16 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     if "or_window" not in df.columns:
         return df
 
+    # --- Sidebar: choose a single window (3m/5m/15m)
     win = st.sidebar.selectbox("OR Window (SPX)", ["3m", "5m", "15m"], index=0, key="spx_or_window")
     dff = df[df["or_window"] == win].copy()
 
+    # Ensure date ordering ASC so latest is at the bottom (matches App.py)
     if "trade_date" in dff.columns:
         dff["trade_date"] = pd.to_datetime(dff["trade_date"], errors="coerce")
         dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
+    # ---------- Helpers ----------
     def _render_block(col, title, items_dict):
         with col:
             st.markdown(f"### {title}")
@@ -318,8 +363,8 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
     def _rate_from_bool(dfX, col):
         if not col or col not in dfX: return "–"
-        s = dfX[col].map(lambda v: True if str(v).strip().lower() in {"true","1","yes"}
-                                   else (False if str(v).strip().lower() in {"false","0","no"} else None))
+        s = dfX[col].map(lambda v: True if str(v).strip().lower() in {"true","1","yes"} else
+                                   (False if str(v).strip().lower() in {"false","0","no"} else None))
         s = s.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
@@ -333,6 +378,7 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         s = pd.to_numeric(dff[colname], errors="coerce")
         return f"{100.0 * s.mean():.1f}%" if len(s.dropna()) else "–"
 
+    # ---------- Break stats (left column) ----------
     days = len(dff)
     broke_up   = _find_col_ci(["broke_up"])
     broke_down = _find_col_ci(["broke_down"])
@@ -345,6 +391,7 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         "Broke Both": _pct_bool_mean(broke_both) if broke_both else "–",
     }
 
+    # ---------- Extension hits (right column) ----------
     up20  = _find_col_ci(["hit_20_up",  "hitup20",  "hit_up20",  "up20",  "or_up_20",  "hit_or_up_20"])
     up50  = _find_col_ci(["hit_50_up",  "hitup50",  "hit_up50",  "up50",  "or_up_50",  "hit_or_up_50"])
     up100 = _find_col_ci(["hit_100_up", "hitup100", "hit_up100", "up100", "or_up_100", "hit_or_up_100"])
@@ -353,6 +400,7 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     dn50  = _find_col_ci(["hit_50_down",  "hitdn50",  "hit_down50",  "down50",  "or_dn_50",  "hit_or_dn_50"])
     dn100 = _find_col_ci(["hit_100_down", "hitdn100", "hit_down100", "down100", "or_dn_100", "hit_or_dn_100"])
 
+    # numeric fallbacks (fractions of OR)
     max_up = _find_col_ci(["max_ext_up", "max_up_ext", "max_up_frac", "max_up_or_mult"])
     max_dn = _find_col_ci(["max_ext_down", "max_dn_ext", "max_dn_frac", "max_dn_or_mult"])
 
@@ -369,7 +417,9 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     _render_block(col_left,  "Break Statistics", left_data)
     _render_block(col_right, "Extension Hits",   right_data)
 
+    # Return filtered DF so App.py keeps your standard styling
     return dff
+
 
 # -------------------- Compatibility stub (no-op override) --------------------
 def render_view_override(view_id: str) -> bool:
