@@ -140,13 +140,9 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
 # --- Euro IB metrics (top-of-view header) ---
 def render_euro_ib_metrics(df):
     """Render Euro-IB stats in a 3-column vertical layout."""
-
-    # --- Compute all probabilities dynamically ---
     days = len(df)
-
     pct = lambda x: f"{(x / days * 100):.1f}%" if days > 0 else "0.0%"
 
-    # ROW 1 (Break Stats)
     row1 = {
         "Days": days,
         "% eIBH Break": pct(df["eibh_break"].sum()),
@@ -154,15 +150,11 @@ def render_euro_ib_metrics(df):
         "% Either Break": pct((df["eibh_break"] | df["eibl_break"]).sum()),
         "% Both Break": pct((df["eibh_break"] & df["eibl_break"]).sum()),
     }
-
-    # ROW 2 (Extension Hits)
     row2 = {
         "% 1.2× Hit": pct(df[["eibh12_hit","eibl12_hit"]].any(axis=1).sum()),
         "% 1.5× Hit": pct(df[["eibh15_hit","eibl15_hit"]].any(axis=1).sum()),
         "% 2.0× Hit": pct(df[["eibh20_hit","eibl20_hit"]].any(axis=1).sum()),
     }
-
-    # ROW 3 (RTH Intraday Hits)
     row3 = {
         "% IBH Hit RTH": pct(df["eur_ibh_rth_hit"].sum()),
         "% IBL Hit RTH": pct(df["eur_ibl_rth_hit"].sum()),
@@ -170,7 +162,6 @@ def render_euro_ib_metrics(df):
         "% Both Hit RTH": pct((df["eur_ibh_rth_hit"] & df["eur_ibl_rth_hit"]).sum()),
     }
 
-    # --- DISPLAY AS THREE COLUMNS ---
     col1, col2, col3 = st.columns(3)
 
     def render_block(col, title, data_dict):
@@ -262,9 +253,16 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
 
     right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
 
-    # Heuristics to keep dataframes compact (no full-width stretch)
-    left_height  = max(140, int(28 * (len(left_df) + 1)))
-    right_height = max(140, int(28 * (len(right_df) + 1)))
+    # ===== Render side-by-side with EXACT heights so there is NO SCROLL =====
+    def _df_height(n_rows: int) -> int:
+        # Tune these if you still see a tiny scrollbar on your theme
+        row_px    = 36   # per data row
+        header_px = 38   # header row
+        extra_pad = 22   # interior padding / borders
+        return header_px + n_rows * row_px + extra_pad
+
+    left_height  = _df_height(len(left_df))
+    right_height = _df_height(len(right_df))
 
     left, right = st.columns([1, 1])
 
@@ -273,12 +271,12 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         st.dataframe(
             left_df,
             hide_index=True,
-            use_container_width=False,  # IMPORTANT: keeps it narrow
-            height=left_height,
+            use_container_width=False,  # keep compact; avoids full-width stretch
+            height=left_height,         # <-- key: fits exactly, no scroll
             column_config={
                 "Pair":   st.column_config.TextColumn("Pair", width=220),
-                "Either": st.column_config.TextColumn("Either", width=90),
-                "Both":   st.column_config.TextColumn("Both", width=90),
+                "Either": st.column_config.TextColumn("Either", width=100),
+                "Both":   st.column_config.TextColumn("Both", width=100),
             },
         )
 
@@ -287,17 +285,16 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         st.dataframe(
             right_df,
             hide_index=True,
-            use_container_width=False,  # IMPORTANT: keeps it narrow
-            height=right_height,
+            use_container_width=False,  # keep compact
+            height=right_height,        # <-- key: fits exactly, no scroll
             column_config={
                 "Level": st.column_config.TextColumn("Level", width=160),
-                "R":     st.column_config.TextColumn("R", width=90),
-                "S":     st.column_config.TextColumn("S", width=90),
+                "R":     st.column_config.TextColumn("R", width=100),
+                "S":     st.column_config.TextColumn("S", width=100),
             },
         )
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
-
 def _sb():
     """Local Supabase client using Streamlit secrets."""
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -402,7 +399,6 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
     # Return filtered DF so App.py keeps your standard styling
     return dff
-
 
 # -------------------- Compatibility stub (no-op override) --------------------
 def render_view_override(view_id: str) -> bool:
