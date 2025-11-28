@@ -194,14 +194,11 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Compact 2-column stats panel for pivot tables:
-      Left column: Days, Hit Pivot, then per-pair single-line 'Either | Both'
-      Right column: per-pair single-line 'Rxx | Sxx'
+    Compact 2-column stats panel for pivot tables using pure Streamlit (no raw HTML).
+    Left: Days, Hit Pivot, and per-pair 'Either | Both' on the same row.
+    Right: per-pair 'Rxx | Sxx' on the same row.
     Works dynamically on the filtered df.
     """
-    import pandas as _pd  # local alias to avoid name shadowing
-    import streamlit.components.v1 as components
-
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
     if df is None or df.empty:
@@ -213,9 +210,9 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     def _col(name: str):
         return cols_lower.get(name.lower())
 
-    def _to_bool(colname: str) -> _pd.Series:
+    def _to_bool(colname: str) -> pd.Series:
         if not colname or colname not in dff:
-            return _pd.Series([], dtype="boolean")
+            return pd.Series([], dtype="boolean")
         s = dff[colname]
         if s.dtype == bool:
             return s.astype("boolean")
@@ -230,7 +227,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
              .astype("boolean")
         )
 
-    def _rate(series: _pd.Series) -> str:
+    def _rate(series: pd.Series) -> str:
         s = series.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
@@ -247,54 +244,39 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # ---- HTML helpers ----
-    def _inline_row(label_left: str, val_left: str, label_right: str, val_right: str) -> str:
-        return f"""
-        <div style="display:flex; justify-content:space-between; gap:12px;
-                    border-bottom:1px solid #eee; padding:4px 0;">
-            <div><strong>{label_left}</strong> {val_left}</div>
-            <div style="text-align:right;"><strong>{label_right}</strong> {val_right}</div>
-        </div>
-        """
+    # Layout: two top columns (left/right panels)
+    left, right = st.columns(2)
 
-    def _section_title(txt: str) -> str:
-        return f"<div style='font-weight:700; margin:6px 0 4px; font-size:1.05rem;'>{txt}</div>"
+    # ---- LEFT panel ----
+    with left:
+        st.subheader("Pivot & Pair Hits")
+        st.write(f"**Days:** {days:,}")
+        if c_hit_pivot:
+            st.write(f"**Hit Pivot:** {_rate(_to_bool(c_hit_pivot))}")
 
-    # ---- LEFT column HTML ----
-    left_html = []
-    left_html.append(_section_title("Pivot & Pair Hits"))
-    left_html.append(_inline_row("Days:", f"{days:,}", "", ""))
+        # Pair rows: Either | Both on one line
+        for label, rcol, scol, _, _ in pairs:
+            sr = _to_bool(rcol)
+            ss = _to_bool(scol)
+            either = (sr | ss).astype("boolean")
+            both   = (sr & ss).astype("boolean")
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.write(f"**{label} Either:** {_rate(either)}")
+            with c2:
+                st.write(f"**Both:** {_rate(both)}")
 
-    if c_hit_pivot:
-        left_html.append(_inline_row("Hit Pivot:", _rate(_to_bool(c_hit_pivot)), "", ""))
-
-    for label, rcol, scol, _, _ in pairs:
-        sr = _to_bool(rcol)
-        ss = _to_bool(scol)
-        either = (sr | ss).astype("boolean")
-        both   = (sr & ss).astype("boolean")
-        left_html.append(
-            _inline_row(f"{label} Either:", _rate(either), "Both:", _rate(both))
-        )
-
-    # ---- RIGHT column HTML ----
-    right_html = []
-    right_html.append(_section_title("Individual Level Hits"))
-    for _, rcol, scol, rname, sname in pairs:
-        r_rate = _rate(_to_bool(rcol)) if rcol else "–"
-        s_rate = _rate(_to_bool(scol)) if scol else "–"
-        right_html.append(_inline_row(f"{rname}:", r_rate, f"{sname}:", s_rate))
-
-    # ---- Wrap both columns in a responsive container and render via components.html ----
-    full_html = f"""
-    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size:14px;">
-        <div>{"".join(left_html)}</div>
-        <div>{"".join(right_html)}</div>
-    </div>
-    """
-
-    # height can be auto; set scrolling to 'no' so it blends in like Markdown.
-    components.html(full_html, height=420, scrolling=False)
+    # ---- RIGHT panel ----
+    with right:
+        st.subheader("Individual Level Hits")
+        for _, rcol, scol, rname, sname in pairs:
+            r_rate = _rate(_to_bool(rcol)) if rcol else "–"
+            s_rate = _rate(_to_bool(scol)) if scol else "–"
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                st.write(f"**{rname}:** {r_rate}")
+            with c2:
+                st.write(f"**{sname}:** {s_rate}")
 
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
