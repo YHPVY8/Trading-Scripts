@@ -194,9 +194,7 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Pure-Streamlit compact two-column stats (no HTML/CSS).
-    - Left: Days, Hit Pivot, and Pair 'Either | Both' rows
-    - Right: Individual levels 'R | S' rows
+    Compact 2-column stats with minimal spacing and table-like alignment.
     """
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
@@ -242,44 +240,78 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # Slightly widen the left panel to reduce perceived gutter between panels
-    left, right = st.columns([1.2, 0.8])
+    # --- CSS to tighten spacing ---
+    st.markdown("""
+        <style>
+        .pivot-row { 
+            display:flex; 
+            justify-content:space-between; 
+            padding:2px 0;
+            margin:0;
+            font-size:0.9rem;
+        }
+        .pivot-row div { 
+            flex:1;
+        }
+        .pivot-col { padding-right:12px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    left, right = st.columns([1, 1])
 
     # ---- LEFT PANEL ----
     with left:
         st.subheader("Pivot & Pair Hits")
 
-        # Inline lines keep value next to label (no spill to the far side)
-        st.markdown(f"**Days:** {days:,}")
-        if c_hit_pivot:
-            st.markdown(f"**Hit Pivot:** {_rate(_to_bool(c_hit_pivot))}")
+        # DAYS
+        st.markdown(
+            f"<div class='pivot-row'><div><strong>Days:</strong></div><div>{days:,}</div></div>",
+            unsafe_allow_html=True
+        )
 
-        # Each pair: [Label + Either] | [Both:] | [value]
+        # Hit Pivot
+        if c_hit_pivot:
+            st.markdown(
+                f"<div class='pivot-row'><div><strong>Hit Pivot:</strong></div><div>{_rate(_to_bool(c_hit_pivot))}</div></div>",
+                unsafe_allow_html=True
+            )
+
+        # Pair (Either | Both)
         for label, rcol, scol, _, _ in pairs:
             sr = _to_bool(rcol)
             ss = _to_bool(scol)
             either = _rate(sr | ss)
             both   = _rate(sr & ss)
 
-            c1, c2, c3 = st.columns([0.72, 0.14, 0.14])  # adjust ratios if you want
-            c1.markdown(f"**{label} Either:** {either}")
-            c2.markdown("**Both:**")
-            c3.markdown(both)
+            st.markdown(
+                f"""
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{label} Either:</strong> {either}</div>
+                    <div><strong>Both:</strong> {both}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
     # ---- RIGHT PANEL ----
     with right:
         st.subheader("Individual Levels")
 
-        # Each row: R label | R value | S label | S value
         for _, rcol, scol, rname, sname in pairs:
             r_rate = _rate(_to_bool(rcol)) if rcol else "–"
             s_rate = _rate(_to_bool(scol)) if scol else "–"
 
-            c1, c2, c3, c4 = st.columns([0.40, 0.20, 0.30, 0.10])
-            c1.markdown(f"**{rname}:**")
-            c2.markdown(r_rate)
-            c3.markdown(f"**{sname}:**")
-            c4.markdown(s_rate)
+            st.markdown(
+                f"""
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{rname}:</strong> {r_rate}</div>
+                    <div><strong>{sname}:</strong> {s_rate}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
 
