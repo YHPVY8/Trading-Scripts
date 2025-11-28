@@ -191,6 +191,99 @@ def render_euro_ib_metrics(df):
     render_block(col2, "Extension Hits", row2)
     render_block(col3, "Intraday RTH Hits", row3)
 
+# --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
+def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
+    """
+    Show a 2-column stats panel for pivot tables:
+      Left column: Hit Pivot, Hit Either/Both for R0.25..R3 vs their S-pair
+      Right column: Individual hit rates (R-only and S-only for each level)
+    Works dynamically on whatever is in df (post-filtered).
+    """
+    if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
+        return
+    if df is None or df.empty:
+        return
+
+    dff = df.copy()
+    cols_lower = {c.lower(): c for c in dff.columns}
+
+    def _col(name: str):
+        return cols_lower.get(name.lower())
+
+    def _to_bool(sname: str) -> pd.Series:
+        if not sname or sname not in dff: 
+            return pd.Series([], dtype="boolean")
+        s = dff[sname]
+        if s.dtype == bool:
+            return s.astype("boolean")
+        # robust True/False coercion
+        return s.astype(str).str.strip().str.lower().map(
+            {"true": True, "1": True, "yes": True, "y": True,
+             "false": False, "0": False, "no": False, "n": False}
+        ).astype("boolean")
+
+    def _rate(series: pd.Series) -> str:
+        s = series.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
+
+    days = len(dff)
+
+    # Top-level pivot hit
+    c_hit_pivot = _col("hit_pivot")
+    s_pivot = _to_bool(c_hit_pivot)
+
+    # Levels to summarize (label, r-col, s-col)
+    levels = [
+        ("R0.25/S0.25", _col("hit_r025"), _col("hit_s025")),
+        ("R0.5/S0.5",   _col("hit_r05"),  _col("hit_s05")),
+        ("R1/S1",       _col("hit_r1"),   _col("hit_s1")),
+        ("R1.5/S1.5",   _col("hit_r15"),  _col("hit_s15")),
+        ("R2/S2",       _col("hit_r2"),   _col("hit_s2")),
+        ("R3/S3",       _col("hit_r3"),   _col("hit_s3")),
+    ]
+
+    # LEFT COLUMN (Pivot + Either/Both per pair)
+    left = {
+        "Days": f"{days:,}",
+        "Hit Pivot": _rate(_to_bool(c_hit_pivot)),
+    }
+    for label, rcol, scol in levels:
+        sr = _to_bool(rcol)
+        ss = _to_bool(scol)
+        either = (sr | ss).astype("boolean")
+        both   = (sr & ss).astype("boolean")
+        left[f"Either {label}"] = _rate(either)
+        left[f"Both {label}"]   = _rate(both)
+
+    # RIGHT COLUMN (individual R / S per pair)
+    right = {}
+    for label, rcol, scol in levels:
+        # derive simple names for display (e.g., "R0.25", "S0.25")
+        if "/" in label:
+            r_name, s_name = label.split("/", 1)
+        else:
+            r_name, s_name = label, ""
+        if rcol: right[f"Hit {r_name}"] = _rate(_to_bool(rcol))
+        if scol: right[f"Hit {s_name}"] = _rate(_to_bool(scol))
+
+    # Render in two tidy columns
+    col1, col2 = st.columns(2)
+
+    def _render_block(col, title, items):
+        with col:
+            st.markdown(f"### {title}")
+            for k, v in items.items():
+                st.markdown(
+                    f"""
+                    <div style='padding:4px 0; margin-bottom:2px; border-bottom:1px solid #ddd;'>
+                        <strong>{k}:</strong> {v}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    _render_block(col1, "Pivot & Pair Hits", left)
+    _render_block(col2, "Individual Level Hits", right)
 
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
