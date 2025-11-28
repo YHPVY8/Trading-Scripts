@@ -194,43 +194,50 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Show a compact 2-column stats panel for pivot tables:
+    Compact 2-column stats panel for pivot tables:
       Left column: Days, Hit Pivot, then per-pair single-line 'Either | Both'
       Right column: per-pair single-line 'Rxx | Sxx'
     Works dynamically on the filtered df.
     """
+    import pandas as _pd  # local alias to avoid name shadowing
+
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
     if df is None or df.empty:
         return
 
     dff = df.copy()
+    # Normalize columns for robust lookup
     cols_lower = {c.lower(): c for c in dff.columns}
 
     def _col(name: str):
         return cols_lower.get(name.lower())
 
-    def _to_bool(sname: str) -> pd.Series:
-        if not sname or sname not in dff:
-            return pd.Series([], dtype="boolean")
-        s = dff[sname]
+    def _to_bool(colname: str) -> _pd.Series:
+        if not colname or colname not in dff:
+            return _pd.Series([], dtype="boolean")
+        s = dff[colname]
         if s.dtype == bool:
             return s.astype("boolean")
-        return s.astype(str).str.strip().str.lower().map(
-            {"true": True, "1": True, "yes": True, "y": True,
-             "false": False, "0": False, "no": False, "n": False}
-        ).astype("boolean")
+        return (
+            s.astype(str)
+             .str.strip()
+             .str.lower()
+             .map({
+                 "true": True, "1": True, "yes": True, "y": True,
+                 "false": False, "0": False, "no": False, "n": False
+             })
+             .astype("boolean")
+        )
 
-    def _rate(series: pd.Series) -> str:
+    def _rate(series: _pd.Series) -> str:
         s = series.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     days = len(dff)
-
-    # Columns
     c_hit_pivot = _col("hit_pivot")
 
-    # Level pairs
+    # Level pairs (label, R col, S col, R label, S label)
     pairs = [
         ("R0.25/S0.25", _col("hit_r025"), _col("hit_s025"), "R0.25", "S0.25"),
         ("R0.5/S0.5",   _col("hit_r05"),  _col("hit_s05"),  "R0.5",  "S0.5"),
@@ -240,9 +247,8 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # --- Render helpers (inline rows with two sides) ---
+    # ---- HTML helpers ----
     def _inline_row(label_left: str, val_left: str, label_right: str, val_right: str) -> str:
-        # Flex row with left/right chunks
         return f"""
         <div style="display:flex; justify-content:space-between; gap:12px;
                     border-bottom:1px solid #eee; padding:4px 0;">
@@ -252,9 +258,9 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         """
 
     def _section_title(txt: str) -> str:
-        return f"<div style='font-weight:700; margin:6px 0 4px 0; font-size:1.05rem;'>{txt}</div>"
+        return f"<div style='font-weight:700; margin:6px 0 4px; font-size:1.05rem;'>{txt}</div>"
 
-    # --- Compute values for LEFT column
+    # ---- LEFT column content
     left_html = []
     left_html.append(_section_title("Pivot & Pair Hits"))
     left_html.append(_inline_row("Days:", f"{days:,}", "", ""))
@@ -262,29 +268,24 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     if c_hit_pivot:
         left_html.append(_inline_row("Hit Pivot:", _rate(_to_bool(c_hit_pivot)), "", ""))
 
-    for label, rcol, scol, rname, sname in pairs:
+    for label, rcol, scol, _, _ in pairs:
         sr = _to_bool(rcol)
         ss = _to_bool(scol)
         either = (sr | ss).astype("boolean")
         both   = (sr & ss).astype("boolean")
         left_html.append(
-            _inline_row(
-                f"{label} Either:", _rate(either),
-                "Both:", _rate(both)
-            )
+            _inline_row(f"{label} Either:", _rate(either), "Both:", _rate(both))
         )
 
-    # --- Compute values for RIGHT column
+    # ---- RIGHT column content
     right_html = []
     right_html.append(_section_title("Individual Level Hits"))
-    for label, rcol, scol, rname, sname in pairs:
+    for _, rcol, scol, rname, sname in pairs:
         r_rate = _rate(_to_bool(rcol)) if rcol else "–"
         s_rate = _rate(_to_bool(scol)) if scol else "–"
-        right_html.append(
-            _inline_row(f"{rname}:", r_rate, f"{sname}:", s_rate)
-        )
+        right_html.append(_inline_row(f"{rname}:", r_rate, f"{sname}:", s_rate))
 
-    # --- Render two columns
+    # ---- Render two columns (use markdown with unsafe_allow_html)
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("\n".join(left_html), unsafe_allow_html=True)
