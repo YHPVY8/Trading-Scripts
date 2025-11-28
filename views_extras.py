@@ -243,7 +243,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     ]
 
     # Slightly widen the left panel to reduce perceived gutter between panels
-    left, right = st.columns([1.15, 0.85])
+    left, right = st.columns([1.2, 0.8])
 
     # ---- LEFT PANEL ----
     with left:
