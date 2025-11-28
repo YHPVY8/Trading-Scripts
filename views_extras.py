@@ -194,10 +194,7 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Compact 2-column stats panel for pivot tables using pure Streamlit (no raw HTML).
-    Left: Days, Hit Pivot, and per-pair 'Either | Both' on the same row.
-    Right: per-pair 'Rxx | Sxx' on the same row.
-    Works dynamically on the filtered df.
+    Compact 2-column stats with minimal spacing and table-like alignment.
     """
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
@@ -234,7 +231,6 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     days = len(dff)
     c_hit_pivot = _col("hit_pivot")
 
-    # Level pairs (label, R col, S col, R label, S label)
     pairs = [
         ("R0.25/S0.25", _col("hit_r025"), _col("hit_s025"), "R0.25", "S0.25"),
         ("R0.5/S0.5",   _col("hit_r05"),  _col("hit_s05"),  "R0.5",  "S0.5"),
@@ -244,40 +240,78 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # Layout: two top columns (left/right panels)
-    left, right = st.columns(2)
+    # --- CSS to tighten spacing ---
+    st.markdown("""
+        <style>
+        .pivot-row { 
+            display:flex; 
+            justify-content:space-between; 
+            padding:2px 0;
+            margin:0;
+            font-size:0.9rem;
+        }
+        .pivot-row div { 
+            flex:1;
+        }
+        .pivot-col { padding-right:12px; }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
-    # ---- LEFT panel ----
+    left, right = st.columns([1, 1])
+
+    # ---- LEFT PANEL ----
     with left:
         st.subheader("Pivot & Pair Hits")
-        st.write(f"**Days:** {days:,}")
-        if c_hit_pivot:
-            st.write(f"**Hit Pivot:** {_rate(_to_bool(c_hit_pivot))}")
 
-        # Pair rows: Either | Both on one line
+        # DAYS
+        st.markdown(
+            f"<div class='pivot-row'><div><strong>Days:</strong></div><div>{days:,}</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # Hit Pivot
+        if c_hit_pivot:
+            st.markdown(
+                f"<div class='pivot-row'><div><strong>Hit Pivot:</strong></div><div>{_rate(_to_bool(c_hit_pivot))}</div></div>",
+                unsafe_allow_html=True
+            )
+
+        # Pair (Either | Both)
         for label, rcol, scol, _, _ in pairs:
             sr = _to_bool(rcol)
             ss = _to_bool(scol)
-            either = (sr | ss).astype("boolean")
-            both   = (sr & ss).astype("boolean")
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                st.write(f"**{label} Either:** {_rate(either)}")
-            with c2:
-                st.write(f"**Both:** {_rate(both)}")
+            either = _rate(sr | ss)
+            both   = _rate(sr & ss)
 
-    # ---- RIGHT panel ----
+            st.markdown(
+                f"""
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{label} Either:</strong> {either}</div>
+                    <div><strong>Both:</strong> {both}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+    # ---- RIGHT PANEL ----
     with right:
-        st.subheader("Individual Level Hits")
+        st.subheader("Individual Levels")
+
         for _, rcol, scol, rname, sname in pairs:
             r_rate = _rate(_to_bool(rcol)) if rcol else "–"
             s_rate = _rate(_to_bool(scol)) if scol else "–"
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                st.write(f"**{rname}:** {r_rate}")
-            with c2:
-                st.write(f"**{sname}:** {s_rate}")
 
+            st.markdown(
+                f"""
+                <div class='pivot-row'>
+                    <div class='pivot-col'><strong>{rname}:</strong> {r_rate}</div>
+                    <div><strong>{sname}:</strong> {s_rate}</div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
 
