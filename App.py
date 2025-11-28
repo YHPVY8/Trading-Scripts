@@ -11,6 +11,7 @@ from views_config import build_tables
 from views_extras import (
     render_current_levels,
     spx_opening_range_filter_and_metrics,
+    render_pivot_stats,
 )
 try:
     from views_extras import render_euro_ib_metrics
@@ -126,6 +127,10 @@ for col, op, val in filters:
         df = df[pd.to_numeric(df[col], errors='coerce') > float(val)]
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors='coerce') < float(val)]
+
+# ---- Pivot stats (dynamic) ----
+if choice in ["Daily Pivots", "RTH Pivots", "ON Pivots"]:
+    render_pivot_stats(choice, df)
 
 # ===================== Euro IB (AFTER filters → dynamic tiles) =====================
 if choice == "Euro IB":
