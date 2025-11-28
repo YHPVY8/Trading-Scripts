@@ -200,6 +200,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     Works dynamically on the filtered df.
     """
     import pandas as _pd  # local alias to avoid name shadowing
+    import streamlit.components.v1 as components
 
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
@@ -207,7 +208,6 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         return
 
     dff = df.copy()
-    # Normalize columns for robust lookup
     cols_lower = {c.lower(): c for c in dff.columns}
 
     def _col(name: str):
@@ -260,7 +260,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     def _section_title(txt: str) -> str:
         return f"<div style='font-weight:700; margin:6px 0 4px; font-size:1.05rem;'>{txt}</div>"
 
-    # ---- LEFT column content
+    # ---- LEFT column HTML ----
     left_html = []
     left_html.append(_section_title("Pivot & Pair Hits"))
     left_html.append(_inline_row("Days:", f"{days:,}", "", ""))
@@ -277,7 +277,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
             _inline_row(f"{label} Either:", _rate(either), "Both:", _rate(both))
         )
 
-    # ---- RIGHT column content
+    # ---- RIGHT column HTML ----
     right_html = []
     right_html.append(_section_title("Individual Level Hits"))
     for _, rcol, scol, rname, sname in pairs:
@@ -285,12 +285,16 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         s_rate = _rate(_to_bool(scol)) if scol else "–"
         right_html.append(_inline_row(f"{rname}:", r_rate, f"{sname}:", s_rate))
 
-    # ---- Render two columns (use markdown with unsafe_allow_html)
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("\n".join(left_html), unsafe_allow_html=True)
-    with col2:
-        st.markdown("\n".join(right_html), unsafe_allow_html=True)
+    # ---- Wrap both columns in a responsive container and render via components.html ----
+    full_html = f"""
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:16px; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; font-size:14px;">
+        <div>{"".join(left_html)}</div>
+        <div>{"".join(right_html)}</div>
+    </div>
+    """
+
+    # height can be auto; set scrolling to 'no' so it blends in like Markdown.
+    components.html(full_html, height=420, scrolling=False)
 
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
