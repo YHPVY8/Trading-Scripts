@@ -194,13 +194,9 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats_compact(df, title="Stats"):
     """
-    Compact 2-column layout:
-      - Left column: Days, Hit Pivot, and the 'Either / Both' pairs for R0.25..R3
-      - Right column: Individual level pairs (R0.25 / S0.25, etc.)
-    Spacing fixes:
-      - 'Days' and 'Hit Pivot' rendered as single-row blocks with value inline.
-      - 'Either' vs 'Both' rendered with tight grid (column-gap: 8px).
-      - Individual level pairs rendered with tight grid (column-gap: 8px).
+    Compact 2-column layout with tight spacing:
+      • Left column: Days, Hit Pivot, and the 'Either / Both' pairs (R0.25..R3)
+      • Right column: Individual level pairs (R / S)
     """
 
     if df is None or df.empty:
@@ -224,20 +220,16 @@ def render_pivot_stats_compact(df, title="Stats"):
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     def _pct_from_either(col_a, col_b):
-        a = _to_bool(col_a)
-        b = _to_bool(col_b)
+        a = _to_bool(col_a); b = _to_bool(col_b)
         if a is None and b is None:
             return "–"
-        if a is None:
-            a = pd.Series(False, index=df.index)
-        if b is None:
-            b = pd.Series(False, index=df.index)
+        if a is None: a = pd.Series(False, index=df.index)
+        if b is None: b = pd.Series(False, index=df.index)
         s = (a | b).astype("boolean").dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     def _pct_from_both(col_a, col_b):
-        a = _to_bool(col_a)
-        b = _to_bool(col_b)
+        a = _to_bool(col_a); b = _to_bool(col_b)
         if a is None or b is None:
             return "–"
         s = (a & b).astype("boolean").dropna()
@@ -260,9 +252,8 @@ def render_pivot_stats_compact(df, title="Stats"):
     ]
 
     # Left column rows: Days, Hit Pivot, plus Either/Both lines
-    left_rows = []
-    left_rows.append(("single", "Days", f"{days:,}", None))
-    left_rows.append(("single", "Hit Pivot", hit_pivot, None))
+    left_rows = [("single", "Days", f"{days:,}", None),
+                 ("single", "Hit Pivot", hit_pivot, None)]
     for label, r_col, s_col in pairs:
         left_rows.append(("pair", f"{label} Either", _pct_from_either(r_col, s_col),
                           ("Both", _pct_from_both(r_col, s_col))))
@@ -270,38 +261,38 @@ def render_pivot_stats_compact(df, title="Stats"):
     # Right column rows: individual R/S on one line
     right_rows = []
     for label, r_col, s_col in pairs:
-        right_rows.append(("pair", label.replace(" ", "") + " Levels",
-                           f"R: {_pct(r_col)}", ("S", _pct(s_col))))
+        right_rows.append(("pair", label, f"R: {_pct(r_col)}", ("S", _pct(s_col))))
 
-    # ---------- layout: two Streamlit columns (closer than default) ----------
-    # tweak the ratios to bring them closer; increase left a bit to reduce perceived gutter
-    col_left, col_right = st.columns([1.18, 0.82])
+    # ---------- tighter column spacing between the two big sections ----------
+    # Use Streamlit's "small" gap and a slightly biased ratio to pull columns closer.
+    col_left, col_right = st.columns([1.12, 0.88], gap="small")
 
-    # ---------- tiny CSS to tighten spacing ----------
+    # ---------- CSS to fix “value pushed to the other column” & tighten gaps ----------
     st.markdown("""
         <style>
-        /* compact row with inline value (Days / Hit Pivot) */
+        /* Make single rows only as wide as their content, so values sit next to labels */
         .pv-row-single {
-            display: inline-flex;
+            display: inline-flex;         /* shrink to content width */
             align-items: baseline;
-            gap: 6px;                 /* value sits right next to label */
-            padding: 2px 0;           /* tight vertical spacing */
+            gap: 6px;                     /* label ↔ value */
+            padding: 2px 0;               /* tight vertical spacing */
             border-bottom: 1px solid #eee;
+            white-space: nowrap;          /* keep on one line */
         }
-        .pv-row-single strong {
-            font-weight: 600;
-        }
+        .pv-row-single strong { font-weight: 600; }
 
-        /* compact two-cell row (Either | Both) or (R: | S:) */
+        /* Two tight pairs per row:
+           [Either label][Either value][spacer][Both label][Both value]  */
         .pv-row-pair {
             display: grid;
-            grid-template-columns: auto auto; /* two tight cells */
-            column-gap: 8px;                  /* ≈ one "tab" */
+            grid-template-columns: max-content max-content 12px max-content max-content;
+            column-gap: 8px;              /* ≈ one tab between cells */
             align-items: baseline;
-            padding: 2px 0;                   /* tight vertical spacing */
+            padding: 2px 0;               /* tight vertical spacing */
             border-bottom: 1px solid #eee;
+            width: fit-content;           /* shrink to content width */
         }
-        .pv-leftcell { font-weight: 600; }
+        .pv-leftcell  { font-weight: 600; }
         .pv-rightcell { text-align: right; }
         </style>
     """, unsafe_allow_html=True)
@@ -319,10 +310,6 @@ def render_pivot_stats_compact(df, title="Stats"):
             )
 
     def _render_pair(col, left_label, left_value, right_pair):
-        """
-        left_label + left_value in the first tight cell,
-        right_pair is a tuple: (right_label, right_value)
-        """
         r_lbl, r_val = right_pair if isinstance(right_pair, tuple) else ("", "")
         with col:
             st.markdown(
@@ -330,6 +317,7 @@ def render_pivot_stats_compact(df, title="Stats"):
                 <div class="pv-row-pair">
                     <div class="pv-leftcell">{left_label}:</div>
                     <div>{left_value}</div>
+                    <div></div>  <!-- small fixed spacer between groups -->
                     <div class="pv-leftcell">{r_lbl}:</div>
                     <div class="pv-rightcell">{r_val}</div>
                 </div>
@@ -348,8 +336,9 @@ def render_pivot_stats_compact(df, title="Stats"):
 
     with col_right:
         st.markdown("### Individual Levels")
-        for kind, a, b, c in right_rows:
-            _render_pair(col_right, a.replace("Levels","").strip(), b, c)
+        for _, a, b, c in right_rows:
+            _render_pair(col_right, a, b, c)
+
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
 
