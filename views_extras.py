@@ -253,16 +253,16 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
 
     right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
 
-    # ===== Render side-by-side with EXACT heights so there is NO SCROLL =====
+    # ===== Exact-fit heights (trimmed to avoid the extra blank row) =====
     def _df_height(n_rows: int) -> int:
-        # Tune these if you still see a tiny scrollbar on your theme
-        row_px    = 36   # per data row
-        header_px = 38   # header row
-        extra_pad = 22   # interior padding / borders
-        return header_px + n_rows * row_px + extra_pad
+        # Slightly smaller than before to remove the spare row.
+        row_px    = 34   # per data row
+        header_px = 36   # header row
+        fudge     = 4    # small trim to avoid overflow rendering a blank line
+        return header_px + n_rows * row_px - fudge
 
-    left_height  = _df_height(len(left_df))
-    right_height = _df_height(len(right_df))
+    left_height  = max(120, _df_height(len(left_df)))
+    right_height = max(120, _df_height(len(right_df)))
 
     left, right = st.columns([1, 1])
 
@@ -271,8 +271,8 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         st.dataframe(
             left_df,
             hide_index=True,
-            use_container_width=False,  # keep compact; avoids full-width stretch
-            height=left_height,         # <-- key: fits exactly, no scroll
+            use_container_width=False,
+            height=left_height,
             column_config={
                 "Pair":   st.column_config.TextColumn("Pair", width=220),
                 "Either": st.column_config.TextColumn("Either", width=100),
@@ -285,8 +285,8 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         st.dataframe(
             right_df,
             hide_index=True,
-            use_container_width=False,  # keep compact
-            height=right_height,        # <-- key: fits exactly, no scroll
+            use_container_width=False,
+            height=right_height,
             column_config={
                 "Level": st.column_config.TextColumn("Level", width=160),
                 "R":     st.column_config.TextColumn("R", width=100),
