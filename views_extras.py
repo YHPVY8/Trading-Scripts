@@ -195,8 +195,6 @@ def render_euro_ib_metrics(df):
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
     Compact 2-column stats with minimal spacing and table-like alignment.
-    - Left panel: Days, Hit Pivot, Pair (Either | Both) on the SAME column lines.
-    - Right panel: Individual R/S levels on SAME column lines.
     """
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
@@ -242,27 +240,20 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # --- CSS: tighter vertical spacing + tighter inner column gap ---
+    # --- CSS to tighten spacing ---
     st.markdown("""
         <style>
-        /* Each stat row acts like a tiny two-column table (label | value) */
-        .pivot-row {
-            display: grid;
-            grid-template-columns: auto auto;  /* label | value */
-            column-gap: 12px;                  /* ~ one "tab" */
-            align-items: center;
-            padding: 2px 0;                    /* tight vertical spacing */
-            margin: 0;
-            font-size: 0.92rem;
-            border-bottom: 1px solid #eee;
+        .pivot-row { 
+            display:flex; 
+            justify-content:space-between; 
+            padding:2px 0;
+            margin:0;
+            font-size:0.9rem;
         }
-        .pivot-row:last-child { border-bottom: none; }
-
-        /* Section headings */
-        .pivot-sub { margin: 4px 0 6px 0; font-weight: 600; }
-
-        /* Layout columns (left/right panels) */
-        .pivot-panel { padding-right: 8px; }
+        .pivot-row div { 
+            flex:1;
+        }
+        .pivot-col { padding-right:12px; }
         </style>
         """,
         unsafe_allow_html=True
@@ -274,35 +265,31 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     with left:
         st.subheader("Pivot & Pair Hits")
 
-        # Days (label | value on same line)
+        # DAYS
         st.markdown(
             f"<div class='pivot-row'><div><strong>Days:</strong></div><div>{days:,}</div></div>",
             unsafe_allow_html=True
         )
 
-        # Hit Pivot (label | value on same line)
+        # Hit Pivot
         if c_hit_pivot:
             st.markdown(
                 f"<div class='pivot-row'><div><strong>Hit Pivot:</strong></div><div>{_rate(_to_bool(c_hit_pivot))}</div></div>",
                 unsafe_allow_html=True
             )
 
-        # Pair lines: "Either | Both" on SAME line with small gap
+        # Pair (Either | Both)
         for label, rcol, scol, _, _ in pairs:
             sr = _to_bool(rcol)
             ss = _to_bool(scol)
             either = _rate(sr | ss)
             both   = _rate(sr & ss)
-            # two small inner cells: (Either) | (Both) close together
+
             st.markdown(
                 f"""
                 <div class='pivot-row'>
-                    <div><strong>{label} Either:</strong></div>
-                    <div>{either}</div>
-                </div>
-                <div class='pivot-row' style='border-bottom:none; padding-top:0;'>
-                    <div style='padding-left:1rem;'><strong>Both:</strong></div>
-                    <div>{both}</div>
+                    <div class='pivot-col'><strong>{label} Either:</strong> {either}</div>
+                    <div><strong>Both:</strong> {both}</div>
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -311,20 +298,16 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     # ---- RIGHT PANEL ----
     with right:
         st.subheader("Individual Levels")
+
         for _, rcol, scol, rname, sname in pairs:
             r_rate = _rate(_to_bool(rcol)) if rcol else "–"
             s_rate = _rate(_to_bool(scol)) if scol else "–"
 
-            # R and S on SAME line with tight gap
             st.markdown(
                 f"""
                 <div class='pivot-row'>
-                    <div><strong>{rname}:</strong></div>
-                    <div>{r_rate}</div>
-                </div>
-                <div class='pivot-row' style='border-bottom:none; padding-top:0;'>
-                    <div style='padding-left:1rem;'><strong>{sname}:</strong></div>
-                    <div>{s_rate}</div>
+                    <div class='pivot-col'><strong>{rname}:</strong> {r_rate}</div>
+                    <div><strong>{sname}:</strong> {s_rate}</div>
                 </div>
                 """,
                 unsafe_allow_html=True
