@@ -181,8 +181,9 @@ def render_euro_ib_metrics(df):
 # --- Pivot tables (Daily / RTH / ON) dynamic stats ---------------------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     """
-    Compact two-column stats with tighter spacing and inline 'Days'/'Hit Pivot' values.
-    Keeps original function name/signature for compatibility.
+    Compact two-column stats using Streamlit-only columns (no HTML/CSS).
+    - Left: Days, Hit Pivot, and Pair 'Either | Both' rows
+    - Right: Individual levels 'R | S' rows
     """
     if choice not in {"Daily Pivots", "RTH Pivots", "ON Pivots"}:
         return
@@ -224,96 +225,52 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # ---------- CSS for tight layout and no-wrap inline rows ----------
-    st.markdown("""
-        <style>
-          /* Outer wrapper: 2 columns with tighter gap */
-          .pv-wrap {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            column-gap: 14px;    /* tighten distance between the two panels */
-            row-gap: 0.5rem;
-            margin: 0.25rem 0 0.5rem 0;
-          }
-          .pv-hdr { font-size: 1.15rem; font-weight: 700; margin: 0.25rem 0 0.5rem 0; }
+    # --- Two main panels (Streamlit-native) ---
+    # Tip: Streamlit doesn't expose gutter control; this keeps things tidy without HTML.
+    left, right = st.columns([1, 1])
 
-          /* Single line label/value (Days, Hit Pivot). Prevent wrap into other cells. */
-          .pv-line {
-            display: grid;
-            grid-template-columns: auto 1fr;
-            align-items: baseline;
-            column-gap: 8px;
-            padding: 2px 0;
-            border-bottom: 1px solid #eee;
-            white-space: nowrap;
-          }
-          .pv-label { font-weight: 600; }
+    # ===== LEFT PANEL =====
+    with left:
+        st.subheader("Pivot & Pair Hits")
 
-          /* Four-cell rows: (left_label | left_value | right_label | right_value) */
-          .pv-row-4 {
-            display: grid;
-            grid-template-columns: auto 1fr auto 1fr;
-            column-gap: 8px;
-            align-items: baseline;
-            padding: 2px 0;
-            border-bottom: 1px solid #eee;
-            white-space: nowrap;
-          }
-          .pv-val-right { text-align: right; }
-        </style>
-    """, unsafe_allow_html=True)
+        # Days (inline: label | value)
+        c1, c2 = st.columns([0.65, 0.35])
+        c1.markdown("**Days:**")
+        c2.markdown(f"{days:,}")
 
-    # ---------- Build LEFT panel HTML ----------
-    left_parts = ['<div>', '<div class="pv-hdr">Pivot &amp; Pair Hits</div>']
-    # Days
-    left_parts.append(
-        f'<div class="pv-line"><div class="pv-label">Days:</div><div>{days:,}</div></div>'
-    )
-    # Hit Pivot
-    if c_hit_pivot:
-        left_parts.append(
-            f'<div class="pv-line"><div class="pv-label">Hit Pivot:</div><div>{_rate(_to_bool(c_hit_pivot))}</div></div>'
-        )
-    # Either / Both pairs
-    for label, rcol, scol, _, _ in pairs:
-        sr = _to_bool(rcol)
-        ss = _to_bool(scol)
-        either = _rate(sr | ss)
-        both   = _rate(sr & ss)
-        left_parts.append(
-            f'''
-            <div class="pv-row-4">
-              <div class="pv-label">{label} Either:</div><div class="pv-val-right">{either}</div>
-              <div class="pv-label">Both:</div><div class="pv-val-right">{both}</div>
-            </div>
-            '''
-        )
-    left_parts.append('</div>')
-    left_html = "\n".join(left_parts)
+        # Hit Pivot (inline: label | value)
+        if c_hit_pivot:
+            c1, c2 = st.columns([0.65, 0.35])
+            c1.markdown("**Hit Pivot:**")
+            c2.markdown(_rate(_to_bool(c_hit_pivot)))
 
-    # ---------- Build RIGHT panel HTML ----------
-    right_parts = ['<div>', '<div class="pv-hdr">Individual Levels</div>']
-    for _, rcol, scol, rname, sname in pairs:
-        r_rate = _rate(_to_bool(rcol)) if rcol else "–"
-        s_rate = _rate(_to_bool(scol)) if scol else "–"
-        right_parts.append(
-            f'''
-            <div class="pv-row-4">
-              <div class="pv-label">{rname}:</div><div class="pv-val-right">{r_rate}</div>
-              <div class="pv-label">{sname}:</div><div class="pv-val-right">{s_rate}</div>
-            </div>
-            '''
-        )
-    right_parts.append('</div>')
-    right_html = "\n".join(right_parts)
+        # Pair rows (inline: label | value | Both | value)
+        for label, rcol, scol, _, _ in pairs:
+            sr = _to_bool(rcol)
+            ss = _to_bool(scol)
+            either = _rate(sr | ss)
+            both   = _rate(sr & ss)
 
-    # ---------- Render two columns with tight gap ----------
-    st.markdown(f'''
-        <div class="pv-wrap">
-          {left_html}
-          {right_html}
-        </div>
-    ''', unsafe_allow_html=True)
+            c1, c2, c3, c4 = st.columns([0.62, 0.18, 0.12, 0.08])
+            c1.markdown(f"**{label} Either:**")
+            c2.markdown(either)
+            c3.markdown("**Both:**")
+            c4.markdown(both)
+
+    # ===== RIGHT PANEL =====
+    with right:
+        st.subheader("Individual Levels")
+
+        # Each row: R label | R value | S label | S value
+        for _, rcol, scol, rname, sname in pairs:
+            r_rate = _rate(_to_bool(rcol)) if rcol else "–"
+            s_rate = _rate(_to_bool(scol)) if scol else "–"
+
+            c1, c2, c3, c4 = st.columns([0.40, 0.20, 0.30, 0.10])
+            c1.markdown(f"**{rname}:**")
+            c2.markdown(r_rate)
+            c3.markdown(f"**{sname}:**")
+            c4.markdown(s_rate)
 
 # -------------------- New helpers (SPX filter + metrics) --------------------
 def _sb():
