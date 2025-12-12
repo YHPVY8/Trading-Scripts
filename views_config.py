@@ -26,9 +26,9 @@ BASE_TABLES = OrderedDict({
     "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
     "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
 
-    # ---- New BASE entry: SPX Daily ----
+    # ---- New BASE entry: SPX Daily (dict-style like Euro IB) ----
     "SPX Daily": {
-        "table": "spx_daily",          # <-- your Supabase table name
+        "table": "spx_daily",
         "date_col": "trade_date",
         "keep": [
             "trade_date", "symbol",
@@ -97,6 +97,7 @@ def _load_yaml_views(path="views.yaml"):
         return []
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+    # Expecting a list under "views" or a dict; be flexible
     if isinstance(data, dict):
         return data.get("views", [])
     if isinstance(data, list):
@@ -123,6 +124,8 @@ def build_tables(sb, cache_bust: int | None = None):
       1) BASE_TABLES (always included),
       2) views from Supabase (dashboard_views), and
       3) optional YAML views (views.yaml).
+
+    No Streamlit cache here to avoid stale registries.
     """
     tables = OrderedDict(BASE_TABLES)
 
@@ -139,7 +142,7 @@ def build_tables(sb, cache_bust: int | None = None):
             "labels": r.get("labels") or {},
         }
 
-    # 3) YAML views
+    # 3) YAML views (optional)
     for v in _load_yaml_views():
         view_name = v.get("view_name")
         table     = v.get("table")
