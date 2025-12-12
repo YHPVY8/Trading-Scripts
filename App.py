@@ -159,6 +159,18 @@ if choice == "Euro IB":
     # Dynamic tiles respect the *already filtered* df
     render_euro_ib_metrics(df)
 
+# ===================== SPX Daily (dynamic: Day + metrics) =====================
+if choice == "SPX Daily":
+
+    # Ensure Day column exists so filtering works
+    if "day" not in df.columns and "trade_date" in df.columns:
+        td = pd.to_datetime(df["trade_date"], errors="coerce")
+        df["day"] = td.dt.strftime("%a")   # e.g. Mon/Tue/Wed
+
+    # Render SPX Daily dynamic tiles (just like SPX OR)
+    render_spx_daily_metrics(df)
+
+
 
 # --- Time formatting for intraday sets ---
 if "time" in df.columns:
