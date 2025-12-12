@@ -137,6 +137,87 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     if lines:
         st.markdown("\n".join(f"- {ln}" for ln in lines))
 
+
+#---SPX Daily metrics
+def render_spx_daily_metrics(df: pd.DataFrame) -> None:
+    """
+    Dynamic tiles for SPX Daily. Runs on the *already-filtered* DataFrame.
+    Shows break stats, PM extensions, and averages.
+    """
+    if df is None or df.empty:
+        return
+
+    dff = df.copy()
+
+    # Robust helpers for bool/numeric cols
+    def _to_bool(col: str) -> pd.Series:
+        if col not in dff: return pd.Series(dtype="boolean")
+        s = dff[col]
+        if s.dtype == bool:
+            return s.astype("boolean")
+        return (
+            s.astype(str).str.strip().str.lower()
+             .map({"true": True, "1": True, "yes": True, "y": True,
+                   "false": False, "0": False, "no": False, "n": False})
+             .astype("boolean")
+        )
+
+    def _num(col: str) -> pd.Series:
+        if col not in dff: return pd.Series(dtype="float64")
+        return pd.to_numeric(dff[col], errors="coerce")
+
+    def _pct(series: pd.Series) -> str:
+        s = series.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
+
+    # Columns (case-insensitive map)
+    cols_lower = {c.lower(): c for c in dff.columns}
+    get = lambda name: cols_lower.get(name.lower())
+
+    # Bool metrics
+    ibh_broke = _to_bool(get("ibh_broke_am") or "ibh_broke_am")
+    ibl_broke = _to_bool(get("ibl_broke_am") or "ibl_broke_am")
+    both_broke = _to_bool(get("both_ib_broke_am") or "both_ib_broke_am")
+    pm_up = _to_bool(get("pm_ext_up") or "pm_ext_up")
+    pm_dn = _to_bool(get("pm_ext_down") or "pm_ext_down")
+
+    # Numeric metrics
+    ibh = _num(get("ibh") or "ibh")
+    ibl = _num(get("ibl") or "ibl")
+    rth_hi = _num(get("rth_hi") or "rth_hi")
+    rth_lo = _num(get("rth_lo") or "rth_lo")
+    ib_ext = _num(get("ib_ext") or "ib_ext")
+
+    ib_range = (ibh - ibl)
+    rth_range = (rth_hi - rth_lo)
+
+    days = len(dff)
+
+    # Layout
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.markdown("### Break Statistics")
+        st.markdown(f"**Days:** {days:,}")
+        st.markdown(f"**IBH Broke AM:** {_pct(ibh_broke)}")
+        st.markdown(f"**IBL Broke AM:** {_pct(ibl_broke)}")
+        st.markdown(f"**Both IB Broke AM:** {_pct(both_broke)}")
+
+    with c2:
+        st.markdown("### PM Extensions")
+        st.markdown(f"**PM Ext Up:** {_pct(pm_up)}")
+        st.markdown(f"**PM Ext Down:** {_pct(pm_dn)}")
+
+    with c3:
+        st.markdown("### Averages")
+        avg_ib_ext  = "–" if ib_ext.dropna().empty else f"{ib_ext.mean():.2f}"
+        avg_ib_rng  = "–" if ib_range.dropna().empty else f"{ib_range.mean():.2f}"
+        avg_rth_rng = "–" if rth_range.dropna().empty else f"{rth_range.mean():.2f}"
+        st.markdown(f"**Avg IB Ext:** {avg_ib_ext}")
+        st.markdown(f"**Avg IB Range:** {avg_ib_rng}")
+        st.markdown(f"**Avg RTH Range:** {avg_rth_rng}")
+
+
 # --- Euro IB metrics (top-of-view header) ---
 def render_euro_ib_metrics(df):
     """Render Euro-IB stats in a 3-column vertical layout."""
