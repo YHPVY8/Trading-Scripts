@@ -12,6 +12,7 @@ from views_extras import (
     render_current_levels,
     spx_opening_range_filter_and_metrics,
     render_pivot_stats,
+    render_spx_daily_metrics,
 )
 try:
     from views_extras import render_euro_ib_metrics
