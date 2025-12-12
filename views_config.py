@@ -31,7 +31,7 @@ BASE_TABLES = OrderedDict({
         "table": "spx_daily",
         "date_col": "trade_date",
         "keep": [
-            "trade_date", "symbol",
+            "trade_date", "day",
             "ibh", "ibl", "ib_mid",
             "am_hi", "am_lo",
             "rth_hi", "rth_lo",
@@ -41,7 +41,7 @@ BASE_TABLES = OrderedDict({
         ],
         "labels": {
             "trade_date": "Date",
-            "symbol": "Symbol",
+            "day": "Day",
             "ibh": "IBH",
             "ibl": "IBL",
             "ib_mid": "IB Mid",
