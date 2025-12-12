@@ -1,4 +1,3 @@
-# views_config.py
 from collections import OrderedDict
 import os
 import json
@@ -27,7 +26,39 @@ BASE_TABLES = OrderedDict({
     "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
     "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
 
-    # ---- New BASE entry: Euro IB (dict-style with keep + labels) ----
+    # ---- New BASE entry: SPX Daily ----
+    "SPX Daily": {
+        "table": "spx_daily",          # <-- your Supabase table name
+        "date_col": "trade_date",
+        "keep": [
+            "trade_date", "symbol",
+            "ibh", "ibl", "ib_mid",
+            "am_hi", "am_lo",
+            "rth_hi", "rth_lo",
+            "ibh_broke_am", "ibl_broke_am", "both_ib_broke_am",
+            "pm_ext_up", "pm_ext_down",
+            "ib_ext",
+        ],
+        "labels": {
+            "trade_date": "Date",
+            "symbol": "Symbol",
+            "ibh": "IBH",
+            "ibl": "IBL",
+            "ib_mid": "IB Mid",
+            "am_hi": "AM High",
+            "am_lo": "AM Low",
+            "rth_hi": "RTH High",
+            "rth_lo": "RTH Low",
+            "ibh_broke_am": "IBH Broke AM",
+            "ibl_broke_am": "IBL Broke AM",
+            "both_ib_broke_am": "Both IB Broke AM",
+            "pm_ext_up": "PM Ext Up",
+            "pm_ext_down": "PM Ext Down",
+            "ib_ext": "IB Ext",
+        },
+    },
+
+    # ---- Existing BASE entry: Euro IB ----
     "Euro IB": {
         "table": "es_eur_ib_summary",
         "date_col": "trade_date",
@@ -66,7 +97,6 @@ def _load_yaml_views(path="views.yaml"):
         return []
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    # Expecting a list under "views" or a dict; be flexible
     if isinstance(data, dict):
         return data.get("views", [])
     if isinstance(data, list):
@@ -93,8 +123,6 @@ def build_tables(sb, cache_bust: int | None = None):
       1) BASE_TABLES (always included),
       2) views from Supabase (dashboard_views), and
       3) optional YAML views (views.yaml).
-
-    No Streamlit cache here to avoid stale registries.
     """
     tables = OrderedDict(BASE_TABLES)
 
@@ -111,7 +139,7 @@ def build_tables(sb, cache_bust: int | None = None):
             "labels": r.get("labels") or {},
         }
 
-    # 3) YAML views (optional)
+    # 3) YAML views
     for v in _load_yaml_views():
         view_name = v.get("view_name")
         table     = v.get("table")
