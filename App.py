@@ -105,6 +105,19 @@ if choice == "SPX Opening Range":
     if "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
+# ===================== Pre-filter augmentations (derived cols must exist for filters) =====================
+if choice == "SPX Daily":
+    # Ensure Day exists BEFORE filters so it's available in the sidebar "Column" selector
+    if "day" not in df.columns and "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+        df["day"] = df["trade_date"].dt.strftime("%a")  # Mon/Tue/...
+
+elif choice == "Euro IB":
+    # Same treatment for Euro IB so Day is filterable
+    if "day" not in df.columns and "trade_date" in df.columns:
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
+        df["day"] = df["trade_date"].dt.strftime("%a")
+
 # ---- Multi-condition filter ----
 filters = []
 num_filters = st.sidebar.number_input("Number of filters", 0, 5, 0)
@@ -135,11 +148,6 @@ if choice in ["Daily Pivots", "RTH Pivots", "ON Pivots"]:
 
 # ===================== Euro IB (AFTER filters → dynamic tiles) =====================
 if choice == "Euro IB":
-    # Prefer DB 'day'; only derive if missing so the column exists for the generic filters
-    if "day" not in df.columns and "trade_date" in df.columns:
-        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
-        df["day"] = df["trade_date"].dt.strftime("%a")  # fallback
-
     # Lock display order for the table
     desired_euro_cols = [
         "trade_date", "day",
@@ -159,18 +167,10 @@ if choice == "Euro IB":
     # Dynamic tiles respect the *already filtered* df
     render_euro_ib_metrics(df)
 
-# ===================== SPX Daily (dynamic: Day + metrics) =====================
+# ===================== SPX Daily (dynamic: Day already ensured + metrics) =====================
 if choice == "SPX Daily":
-
-    # Ensure Day column exists so filtering works
-    if "day" not in df.columns and "trade_date" in df.columns:
-        td = pd.to_datetime(df["trade_date"], errors="coerce")
-        df["day"] = td.dt.strftime("%a")   # e.g. Mon/Tue/Wed
-
-    # Render SPX Daily dynamic tiles (just like SPX OR)
+    # Render SPX Daily dynamic tiles (runs on filtered df)
     render_spx_daily_metrics(df)
-
-
 
 # --- Time formatting for intraday sets ---
 if "time" in df.columns:
