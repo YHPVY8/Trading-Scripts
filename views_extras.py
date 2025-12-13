@@ -1,7 +1,31 @@
+# views_extras.py
 import streamlit as st
 import pandas as pd
 from supabase import create_client
 from datetime import date, timedelta
+
+# -------------------- Helpers used everywhere --------------------
+
+def _normalize_table_name(name: str) -> str:
+    return (name or "").strip().split(".")[-1].lower()
+
+def _num_in(df: pd.DataFrame, col: str) -> pd.Series:
+    if df is None or df.empty or col not in df:
+        return pd.Series(dtype="float64")
+    return pd.to_numeric(df[col], errors="coerce")
+
+def _to_bool_in(df: pd.DataFrame, col: str) -> pd.Series:
+    if df is None or df.empty or col not in df:
+        return pd.Series(dtype="boolean")
+    s = df[col]
+    if s.dtype == bool:
+        return s.astype("boolean")
+    return (
+        s.astype(str).str.strip().str.lower()
+         .map({"true": True, "1": True, "yes": True, "y": True,
+               "false": False, "0": False, "no": False, "n": False})
+         .astype("boolean")
+    )
 
 # -------------------- Existing content (kept) --------------------
 LEVEL_ALIASES = [
@@ -26,25 +50,58 @@ PIVOT_TABLES = {
     "es_30m_pivot_levels",
     "es_rth_pivot_levels",
     "es_on_pivot_levels",
-    
+
     # --- Added GC pivot tables ---
     "gc_daily_pivot_levels",
     "gc_weekly_pivot_levels",
 }
 
-# --- Render current pivot levels (generalized for GC and ES) ---
+# -------------------- Fetch current pivot levels --------------------
+def _first_present(rec, keys):
+    for k in keys:
+        if k in rec and rec[k] not in (None, ""):
+            return rec[k]
+    return None
+
+def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
+    try:
+        resp = (
+            sb.table(table_name)
+              .select("*")
+              .order(date_col, desc=True)
+              .limit(1)
+              .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return {}
+
+        rec = rows[0]
+
+        out = {}
+        for label, cands in LEVEL_ALIASES:
+            v = _first_present(rec, cands)
+            if isinstance(v, str):
+                try:
+                    v = float(v.replace(",", ""))
+                except Exception:
+                    pass
+            out[label] = v
+        return out
+    except Exception:
+        return {}
+
+# -------------------- Render current pivot levels --------------------
 def render_current_levels(sb, choice: str, table_name: str, date_col: str):
     norm = _normalize_table_name(table_name)
     is_pivot = (norm in PIVOT_TABLES) or norm.endswith("_pivot_levels")
     if not is_pivot:
-        # Small diagnostic so you know why nothing prints
         st.caption(f"ℹ️ Skipping levels (table '{table_name}' not recognized as a pivot-level table).")
         return
 
     levels = fetch_current_levels(sb, table_name, date_col)
 
     if not any(levels.values()):
-        # Show what keys were present in the latest record to help diagnose column-name mismatches
         try:
             probe = (
                 sb.table(table_name)
@@ -56,7 +113,7 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
             keys = ", ".join(sorted((probe.data or [{}])[0].keys()))
         except Exception:
             keys = "unknown"
-        st.caption(f"ℹ️ No current levels found (table='{table_name}', date_col='{date_col}'). Latest row keys: {keys}")
+        st.caption(f"ℹ️ No current levels found (table='{table_name}'). Latest row keys: {keys}")
         return
 
     st.markdown("#### Current period levels")
@@ -65,52 +122,28 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
         v = levels.get(label)
         if v is not None:
             try:
-                lines.append(f"**{label}**  {v:,.2f}")
+                lines.append(f"- **{label}** {v:,.2f}")
             except Exception:
-                lines.append(f"**{label}**  {v}")
+                lines.append(f"- **{label}** {v}")
     if lines:
-        st.markdown("\n".join(f"- {ln}" for ln in lines))
+        st.markdown("\n".join(lines))
 
-
-# --- GC Daily Pivots metrics ---
+# -------------------- GC Daily Pivots --------------------
 def render_gc_daily_pivots_metrics(df: pd.DataFrame) -> None:
-    """
-    Dynamic tiles for GC Daily Pivots. Runs on the *already-filtered* DataFrame.
-    """
     if df is None or df.empty:
         return
 
     dff = df.copy()
 
-    # Helper functions for bool/numeric conversions
-    def _to_bool(col: str) -> pd.Series:
-        if col not in dff: return pd.Series(dtype="boolean")
-        s = dff[col]
-        if s.dtype == bool:
-            return s.astype("boolean")
-        return (
-            s.astype(str).str.strip().str.lower()
-             .map({"true": True, "1": True, "yes": True, "y": True,
-                   "false": False, "0": False, "no": False, "n": False})
-             .astype("boolean")
-        )
+    gc_pivot = _num_in(dff, "pivot")
+    gc_r1 = _num_in(dff, "r1")
+    gc_s1 = _num_in(dff, "s1")
+    gc_r2 = _num_in(dff, "r2")
+    gc_s2 = _num_in(dff, "s2")
+    gc_r3 = _num_in(dff, "r3")
+    gc_s3 = _num_in(dff, "s3")
 
-    def _num(col: str) -> pd.Series:
-        if col not in dff: return pd.Series(dtype="float64")
-        return pd.to_numeric(dff[col], errors="coerce")
-
-    # Metrics for GC Daily
-    gc_pivot = _num("pivot")
-    gc_r1 = _num("r1")
-    gc_s1 = _num("s1")
-    gc_r2 = _num("r2")
-    gc_s2 = _num("s2")
-    gc_r3 = _num("r3")
-    gc_s3 = _num("s3")
-
-    # Layout
     c1, c2 = st.columns(2)
-
     with c1:
         st.markdown("### GC Daily Pivots")
         st.markdown(f"**Pivot:** {gc_pivot.mean():.2f}")
@@ -126,29 +159,22 @@ def render_gc_daily_pivots_metrics(df: pd.DataFrame) -> None:
 
     return dff
 
-
-# --- GC Weekly Pivots metrics ---
+# -------------------- GC Weekly Pivots --------------------
 def render_gc_weekly_pivots_metrics(df: pd.DataFrame) -> None:
-    """
-    Dynamic tiles for GC Weekly Pivots. Runs on the *already-filtered* DataFrame.
-    """
     if df is None or df.empty:
         return
 
     dff = df.copy()
 
-    # Metrics for GC Weekly
-    gc_weekly_pivot = _num("pivot")
-    gc_weekly_r1 = _num("r1")
-    gc_weekly_s1 = _num("s1")
-    gc_weekly_r2 = _num("r2")
-    gc_weekly_s2 = _num("s2")
-    gc_weekly_r3 = _num("r3")
-    gc_weekly_s3 = _num("s3")
+    gc_weekly_pivot = _num_in(dff, "pivot")
+    gc_weekly_r1 = _num_in(dff, "r1")
+    gc_weekly_s1 = _num_in(dff, "s1")
+    gc_weekly_r2 = _num_in(dff, "r2")
+    gc_weekly_s2 = _num_in(dff, "s2")
+    gc_weekly_r3 = _num_in(dff, "r3")
+    gc_weekly_s3 = _num_in(dff, "s3")
 
-    # Layout
     c1, c2 = st.columns(2)
-
     with c1:
         st.markdown("### GC Weekly Pivots")
         st.markdown(f"**Pivot:** {gc_weekly_pivot.mean():.2f}")
@@ -163,4 +189,3 @@ def render_gc_weekly_pivots_metrics(df: pd.DataFrame) -> None:
         st.markdown(f"**S3:** {gc_weekly_s3.mean():.2f}")
 
     return dff
-
