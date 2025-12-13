@@ -21,6 +21,10 @@ BASE_TABLES = OrderedDict({
     "4h Pivots": ("es_4hr_pivot_levels", "time"),
     "30m Pivots": ("es_30m_pivot_levels", "time"),
 
+    # ---- New GC pivot views ----
+    "GC Daily Pivots": ("gc_daily_pivot_levels", "date"),
+    "GC Weekly Pivots": ("gc_weekly_pivot_levels", "date"),
+
     "Range Extensions": ("es_range_extensions", "date"),
     "RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
     "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
