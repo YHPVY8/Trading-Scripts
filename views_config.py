@@ -15,19 +15,19 @@ BASE_TABLES = OrderedDict({
     "2h ES": ("es_2hr", "time"),
     "4h ES": ("es_4hr", "time"),
 
-    "Daily Pivots": ("es_daily_pivot_levels", "date"),
-    "Weekly Pivots": ("es_weekly_pivot_levels", "date"),
-    "2h Pivots": ("es_2hr_pivot_levels", "time"),
-    "4h Pivots": ("es_4hr_pivot_levels", "time"),
-    "30m Pivots": ("es_30m_pivot_levels", "time"),
+    "ES Daily Pivots": ("es_daily_pivot_levels", "date"),
+    "ES Weekly Pivots": ("es_weekly_pivot_levels", "date"),
+    "ES 2h Pivots": ("es_2hr_pivot_levels", "time"),
+    "ES 4h Pivots": ("es_4hr_pivot_levels", "time"),
+    "ES 30m Pivots": ("es_30m_pivot_levels", "time"),
 
     # ---- New GC pivot views ----
     "GC Daily Pivots": ("gc_daily_pivot_levels", "date"),
     "GC Weekly Pivots": ("gc_weekly_pivot_levels", "date"),
 
-    "Range Extensions": ("es_range_extensions", "date"),
-    "RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
-    "ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
+    "ES Range Extensions": ("es_range_extensions", "date"),
+    "ES RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
+    "ES ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
     "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
 
     # ---- New BASE entry: SPX Daily (dict-style like Euro IB) ----
