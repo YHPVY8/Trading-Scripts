@@ -165,12 +165,16 @@ for col, op, val in filters:
 
 # ---- Pivot stats (dynamic) ----
 if choice in [
+    # Daily/Weekly (ES & GC)
     "Daily Pivots",
     "Weekly Pivots",
     "ES Daily Pivots",
     "GC Daily Pivots",
     "ES Weekly Pivots",
     "GC Weekly Pivots",
+    # Session pivots (ES)
+    "ES RTH Pivots",
+    "ES ON Pivots",
 ]:
     render_pivot_stats(choice, df)
 
@@ -258,7 +262,7 @@ elif choice in ["Weekly Pivots", "ES Weekly Pivots", "GC Weekly Pivots"]:
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
-elif choice in ["2h Pivots", "4h Pivots", "30m Pivots"]:
+elif choice in ["ES 2h Pivots", "ES 4h Pivots", "ES 30m Pivots"]:
     keep_cols_fixed = [
         "time",
         "globex_date",
@@ -296,7 +300,7 @@ elif choice in ["Daily ES", "Weekly ES", "30m ES", "2h ES", "4h ES"]:
     ]
     df = df[[c for c in keep_fixed if c in df.columns]]
 
-elif choice == "Range Extensions":
+elif choice == "ES Range Extensions":
     keep_fixed = [
         "date",
         "day",
@@ -320,7 +324,7 @@ elif choice == "Range Extensions":
     ]
     df = df[[c for c in keep_fixed if c in df.columns]]
 
-elif choice in ["RTH Pivots", "ON Pivots"]:
+elif choice in ["ES RTH Pivots", "ES ON Pivots"]:
     keep_cols_fixed = [
         "trade_date",
         "day",
@@ -383,19 +387,21 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
     ]
 
     THICK_BORDER_AFTER = {
+        # Daily
         "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "ES Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "GC Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-
+        # Weekly
         "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "ES Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "GC Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-
-        "2h Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "4h Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "30m Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        "ON Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        # Intraday ES
+        "ES 2h Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "ES 4h Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "ES 30m Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        # Session ES
+        "ES RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
+        "ES ON Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     }
     border_after = THICK_BORDER_AFTER.get(choice, [])
     border_after = [c for c in border_after if c in df.columns]
@@ -435,8 +441,7 @@ HEADER_LABELS = {
         "hit_r2": "R2", "hit_s2": "S2",
         "hit_r3": "R3", "hit_s3": "S3",
     },
-
-    # ---- New GC/ES aliases ----
+    # ES / GC labeled views
     "ES Daily Pivots": {
         "date": "Date", "day": "Day",
         "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
