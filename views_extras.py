@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 from supabase import create_client
 from datetime import date, timedelta
+import re
 
 # -------------------- Column label aliases for fetch_current_levels --------------------
 LEVEL_ALIASES = [
@@ -368,35 +369,48 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
             },
         )
 
-# -------------------- GC Levels (dynamic probs using existing True/False fields) --------------------
+# ==================== GC Levels (dynamic probabilities for specified fields) ====================
 _WEEKDAY_ABBR = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
 def _cols_ci(df: pd.DataFrame):
     return {c.lower(): c for c in df.columns}
 
-def _find_ci(dff: pd.DataFrame, *candidates: str) -> str | None:
+def _normalize_key(s: str) -> str:
+    """
+    Case/space/punct-insensitive key:
+    - lowercases
+    - replace unicode × with x
+    - remove spaces, dashes, dots, and non-alphanumerics (keep a–z, 0–9, x)
+    """
+    s = s.lower().replace("×", "x")
+    s = re.sub(r"[^a-z0-9x]+", "", s)  # drop spaces, hyphens, dots, etc.
+    return s
+
+def _build_ci_map(dff: pd.DataFrame) -> dict:
+    return {_normalize_key(c): c for c in dff.columns}
+
+def _find_norm(dff: pd.DataFrame, *candidates: str) -> str | None:
     if dff is None or dff.empty: return None
-    m = _cols_ci(dff)
+    m = _build_ci_map(dff)
     for cand in candidates:
-        if cand and cand.lower() in m:
-            return m[cand.lower()]
+        k = _normalize_key(cand)
+        if k in m:
+            return m[k]
     return None
 
 def _ensure_day_col(dff: pd.DataFrame) -> pd.DataFrame:
-    """
-    Ensure a 'Day' (Mon…Sun) column exists, derived from any date-like column if missing.
-    No sidebar filters are added; this respects the app's existing filter UI.
-    """
+    """Ensure a 'Day' (Mon…Sun) column exists (derived from a date-like column if missing)."""
     if "Day" in dff.columns:
         dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
         return dff
 
-    date_col = _find_ci(dff, "globex_date", "trade_date", "date", "session_date", "time", "timestamp")
-    if date_col:
-        dd = pd.to_datetime(dff[date_col], errors="coerce")
-        day_full = dd.dt.day_name()
-        dff["Day"] = day_full.map(lambda x: x[:3] if isinstance(x, str) else None)
-    else:
+    # try a few date-like columns
+    for cand in ["globex_date", "trade_date", "date", "session_date", "time", "timestamp"]:
+        if cand in dff.columns:
+            dd = pd.to_datetime(dff[cand], errors="coerce")
+            dff["Day"] = dd.dt.day_name().str.slice(0, 3)
+            break
+    if "Day" not in dff.columns:
         dff["Day"] = None
 
     dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
@@ -420,12 +434,19 @@ def _pct_mean_bool(s: pd.Series) -> str:
 
 def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Dynamic probability tiles for the gc_levels base table.
-    - No extra sidebar filters or lookbacks.
-    - Uses the app's existing filters (already applied to df).
-    - Uses only the True/False fields present in the table.
-    Also ensures a 'Day' column is present so the user can filter/sort it
-    with the app's standard controls.
+    Dynamic probability tiles for the gc_levels base table (Gold).
+    Uses ONLY these True/False fields (case/spacing tolerant):
+      - aIBH Broke Premarket
+      - aIBL Broke Premarket
+      - aIBH Broke Adj RTH
+      - aIBL Broke Adj RTH
+      - aIBH1.2 - Hit RTH
+      - aIBH1.5 - Hit RTH
+      - aIBH2x  - Hit RTH
+      - aIBL1.2x - Hit RTH
+      - aIBL1.5x - Hit RTH
+      - aIBL2x   - Hit RTH
+    No extra sidebar controls. Respects app-level filters that produced `df`.
     """
     if df is None or df.empty:
         st.info("No data in gc_levels for the current filters.")
@@ -434,65 +455,90 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     dff = df.copy()
     dff = _ensure_day_col(dff)
 
-    # ---- Dynamic probabilities from True/False fields ----
-    get = lambda *names: _find_ci(dff, *names)
-    c_hit_pivot = get("hit_pivot")
+    # Resolve columns by normalized names (accepts minor label variations)
+    get = lambda *names: _find_norm(dff, *names)
 
-    pairs = [
-        ("R0.25/S0.25", get("hit_r025"), get("hit_s025"), "R0.25", "S0.25"),
-        ("R0.5/S0.5",   get("hit_r05"),  get("hit_s05"),  "R0.5",  "S0.5"),
-        ("R1/S1",       get("hit_r1"),   get("hit_s1"),   "R1",    "S1"),
-        ("R1.5/S1.5",   get("hit_r15"),  get("hit_s15"),  "R1.5",  "S1.5"),
-        ("R2/S2",       get("hit_r2"),   get("hit_s2"),   "R2",    "S2"),
-        ("R3/S3",       get("hit_r3"),   get("hit_s3"),   "R3",    "S3"),
-    ]
+    c_ibh_pm = get("aIBH Broke Premarket", "aibh broke premarket")
+    c_ibl_pm = get("aIBL Broke Premarket", "aibl broke premarket")
 
+    c_ibh_adj = get("aIBH Broke Adj RTH", "aibh broke adj rth", "aibh broke adjusted rth")
+    c_ibl_adj = get("aIBL Broke Adj RTH", "aibl broke adj rth", "aibl broke adjusted rth")
+
+    c_ibh_12 = get("aIBH1.2 - Hit RTH", "aibh1.2 - hit rth", "aibh12 hit rth", "aibh1_2 hit rth")
+    c_ibh_15 = get("aIBH1.5 - Hit RTH", "aibh1.5 - hit rth", "aibh15 hit rth", "aibh1_5 hit rth")
+    c_ibh_2x = get("aIBH2x - Hit RTH",  "aibh2x - hit rth",  "aibh2x hit rth")
+
+    c_ibl_12 = get("aIBL1.2x - Hit RTH", "aibl1.2x - hit rth", "aibl12x hit rth", "aibl1_2x hit rth")
+    c_ibl_15 = get("aIBL1.5x - Hit RTH", "aibl1.5x - hit rth", "aibl15x hit rth", "aibl1_5x hit rth")
+    c_ibl_2x = get("aIBL2x - Hit RTH",   "aibl2x - hit rth",   "aibl2x hit rth")
+
+    # Build tiles
     days = len(dff)
-    left_rows = [("Days", f"{days:,}", "")]
-    if c_hit_pivot:
-        left_rows.append(("Hit Pivot", _pct_mean_bool(_to_bool_series(dff, c_hit_pivot)), ""))
 
-    for label, rcol, scol, _, _ in pairs:
-        sr = _to_bool_series(dff, rcol)
-        ss = _to_bool_series(dff, scol)
-        either = _pct_mean_bool(sr | ss)
-        both   = _pct_mean_bool(sr & ss)
-        left_rows.append((f"{label} Either", either, both))
-    left_df = pd.DataFrame(left_rows, columns=["Pair", "Either", "Both"])
+    # --- Premarket breaks ---
+    s_ibh_pm = _to_bool_series(dff, c_ibh_pm)
+    s_ibl_pm = _to_bool_series(dff, c_ibl_pm)
+    pm_either = _pct_mean_bool((s_ibh_pm | s_ibl_pm) if len(s_ibh_pm) and len(s_ibl_pm) else pd.Series(dtype="boolean"))
+    pm_both   = _pct_mean_bool((s_ibh_pm & s_ibl_pm) if len(s_ibh_pm) and len(s_ibl_pm) else pd.Series(dtype="boolean"))
 
-    right_rows = []
-    for _, rcol, scol, rname, sname in pairs:
-        r_rate = _pct_mean_bool(_to_bool_series(dff, rcol)) if rcol else "–"
-        s_rate = _pct_mean_bool(_to_bool_series(dff, scol)) if scol else "–"
-        right_rows.append((f"{rname}/{sname}", r_rate, s_rate))
-    right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
+    row_pm = {
+        "Days": f"{days:,}",
+        "aIBH Broke Premarket": _pct_mean_bool(s_ibh_pm),
+        "aIBL Broke Premarket": _pct_mean_bool(s_ibl_pm),
+        "Either Premarket": pm_either,
+        "Both Premarket":   pm_both,
+    }
 
-    def _df_height(n_rows: int) -> int:
-        row_px, header_px, fudge = 34, 36, 0
-        return max(120, header_px + n_rows * row_px - fudge)
+    # --- Adjusted RTH breaks ---
+    s_ibh_adj = _to_bool_series(dff, c_ibh_adj)
+    s_ibl_adj = _to_bool_series(dff, c_ibl_adj)
+    adj_either = _pct_mean_bool((s_ibh_adj | s_ibl_adj) if len(s_ibh_adj) and len(s_ibl_adj) else pd.Series(dtype="boolean"))
+    adj_both   = _pct_mean_bool((s_ibh_adj & s_ibl_adj) if len(s_ibh_adj) and len(s_ibl_adj) else pd.Series(dtype="boolean"))
 
-    st.markdown("### GC Levels — Dynamic Probabilities")
-    colL, colR = st.columns(2)
-    with colL:
-        st.subheader("Pairs / Either / Both")
-        st.dataframe(
-            left_df, hide_index=True, use_container_width=False, height=_df_height(len(left_df)),
-            column_config={
-                "Pair":   st.column_config.TextColumn("Pair", width=220),
-                "Either": st.column_config.TextColumn("Either", width=100),
-                "Both":   st.column_config.TextColumn("Both", width=100),
-            },
-        )
-    with colR:
-        st.subheader("Individual Levels")
-        st.dataframe(
-            right_df, hide_index=True, use_container_width=False, height=_df_height(len(right_df)),
-            column_config={
-                "Level": st.column_config.TextColumn("Level", width=160),
-                "R":     st.column_config.TextColumn("R", width=100),
-                "S":     st.column_config.TextColumn("S", width=100),
-            },
-        )
+    row_adj = {
+        "aIBH Broke Adj RTH": _pct_mean_bool(s_ibh_adj),
+        "aIBL Broke Adj RTH": _pct_mean_bool(s_ibl_adj),
+        "Either Adj RTH": adj_either,
+        "Both Adj RTH":   adj_both,
+    }
+
+    # --- RTH Extension Hits ---
+    s_ibh_12 = _to_bool_series(dff, c_ibh_12)
+    s_ibh_15 = _to_bool_series(dff, c_ibh_15)
+    s_ibh_2x = _to_bool_series(dff, c_ibh_2x)
+
+    s_ibl_12 = _to_bool_series(dff, c_ibl_12)
+    s_ibl_15 = _to_bool_series(dff, c_ibl_15)
+    s_ibl_2x = _to_bool_series(dff, c_ibl_2x)
+
+    row_hits = {
+        "aIBH 1.2× — Hit RTH": _pct_mean_bool(s_ibh_12),
+        "aIBH 1.5× — Hit RTH": _pct_mean_bool(s_ibh_15),
+        "aIBH 2×   — Hit RTH": _pct_mean_bool(s_ibh_2x),
+        "aIBL 1.2× — Hit RTH": _pct_mean_bool(s_ibl_12),
+        "aIBL 1.5× — Hit RTH": _pct_mean_bool(s_ibl_15),
+        "aIBL 2×   — Hit RTH": _pct_mean_bool(s_ibl_2x),
+    }
+
+    # Render three tidy blocks
+    col1, col2, col3 = st.columns(3)
+
+    def _render_block(col, title, d):
+        with col:
+            st.markdown(f"### {title}")
+            for k, v in d.items():
+                st.markdown(
+                    f"""
+                    <div style='padding:4px 0; margin-bottom:2px; border-bottom:1px solid #ddd;'>
+                        <strong>{k}:</strong> {v}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    _render_block(col1, "Premarket Breaks", row_pm)
+    _render_block(col2, "Adjusted RTH Breaks", row_adj)
+    _render_block(col3, "RTH Extension Hits", row_hits)
 
     return dff
 
