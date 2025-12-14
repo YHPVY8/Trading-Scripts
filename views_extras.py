@@ -323,6 +323,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     for _, rcol, scol, rname, sname in pairs:
         r_rate = _rate(_to_bool(rcol)) if rcol else "–"
         s_rate = _rate(_to_bool(scol)) if scol else "–"
+        right_df.append if False else None  # (keeping style consistent; ignore)
         right_rows.append((f"{rname}/{sname}", r_rate, s_rate))
 
     right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
@@ -367,8 +368,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
             },
         )
 
-# -------------------- GC Levels (filters + dynamic probabilities + Day support) --------------------
-_WEEKDAY_FULL = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+# -------------------- GC Levels (dynamic probs using existing True/False fields) --------------------
 _WEEKDAY_ABBR = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
 def _cols_ci(df: pd.DataFrame):
@@ -383,9 +383,11 @@ def _find_ci(dff: pd.DataFrame, *candidates: str) -> str | None:
     return None
 
 def _ensure_day_col(dff: pd.DataFrame) -> pd.DataFrame:
-    """Ensure a 'Day' (Mon…Sun) column exists. Try existing 'Day', else derive from a date column."""
+    """
+    Ensure a 'Day' (Mon…Sun) column exists, derived from any date-like column if missing.
+    No sidebar filters are added; this respects the app's existing filter UI.
+    """
     if "Day" in dff.columns:
-        # ensure correct categorical ordering if it's already present
         dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
         return dff
 
@@ -418,17 +420,12 @@ def _pct_mean_bool(s: pd.Series) -> str:
 
 def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Filters and dynamic probability tiles for the gc_levels base table.
-    Returns the filtered dataframe (with a 'Day' column).
-    Expected columns (case-insensitive if present):
-      - hit_pivot
-      - hit_r025, hit_s025
-      - hit_r05,  hit_s05
-      - hit_r1,   hit_s1
-      - hit_r15,  hit_s15
-      - hit_r2,   hit_s2
-      - hit_r3,   hit_s3
-      - Day (optional; auto-derived from a date column if missing)
+    Dynamic probability tiles for the gc_levels base table.
+    - No extra sidebar filters or lookbacks.
+    - Uses the app's existing filters (already applied to df).
+    - Uses only the True/False fields present in the table.
+    Also ensures a 'Day' column is present so the user can filter/sort it
+    with the app's standard controls.
     """
     if df is None or df.empty:
         st.info("No data in gc_levels for the current filters.")
@@ -437,35 +434,8 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     dff = df.copy()
     dff = _ensure_day_col(dff)
 
-    # ---- Sidebar filters ----
-    # Day-of-week multiselect (Mon→Sun), default to all present
-    present_days = [d for d in _WEEKDAY_ABBR if (("Day" in dff.columns) and (dff["Day"] == d).any())]
-    day_sel = st.sidebar.multiselect(
-        "Day of Week (GC Levels)",
-        options=_WEEKDAY_ABBR,
-        default=present_days if present_days else _WEEKDAY_ABBR,
-        key="gc_levels_day"
-    )
-    if day_sel:
-        dff = dff[dff["Day"].isin(day_sel)]
-
-    # Optional lookback filter by date if we can find a date-like column
-    date_col = _find_ci(dff, "globex_date", "trade_date", "date", "session_date", "time", "timestamp")
-    if date_col:
-        with st.sidebar.expander("Lookback (optional)", expanded=False):
-            days_lookback = st.slider("Days", min_value=10, max_value=1000, value=250, step=10, key="gc_levels_lookback")
-        dd = pd.to_datetime(dff[date_col], errors="coerce")
-        cutoff = (pd.to_datetime("today").normalize() - pd.Timedelta(days=days_lookback))
-        dff = dff[dd >= cutoff]
-
-    # Natural Day ordering for display
-    if "Day" in dff.columns:
-        dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
-        dff = dff.sort_values(["Day"], kind="stable").reset_index(drop=True)
-
-    # ---- Dynamic probabilities ----
+    # ---- Dynamic probabilities from True/False fields ----
     get = lambda *names: _find_ci(dff, *names)
-
     c_hit_pivot = get("hit_pivot")
 
     pairs = [
@@ -523,10 +493,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
                 "S":     st.column_config.TextColumn("S", width=100),
             },
         )
-
-    # Optional: show the filtered raw table with Day and natural sort
-    with st.expander("Show filtered gc_levels rows"):
-        st.dataframe(dff, hide_index=True, use_container_width=True)
 
     return dff
 
