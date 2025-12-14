@@ -65,7 +65,7 @@ if df.empty:
 
 # --- Sort newest bottom ---
 if date_col not in df.columns:
-    for fallback in ["trade_date", "date", "time"]:
+    for fallback in ["trade_date", "date", "time", "globex_date"]:
         if fallback in df.columns:
             date_col = fallback
             break
@@ -73,6 +73,12 @@ if date_col not in df.columns:
 if date_col in df.columns:
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.sort_values(date_col).reset_index(drop=True)
+
+# >>> GC LEVELS — ensure Day column exists
+if choice == "GC Levels":
+    if "globex_date" in df.columns:
+        df["globex_date"] = pd.to_datetime(df["globex_date"], errors="coerce")
+        df["day"] = df["globex_date"].dt.strftime("%a")
 
 # --- CLEANUP for specific datasets ---
 if choice == "Daily ES" and "id" in df.columns:
@@ -162,6 +168,28 @@ for col, op, val in filters:
         df = df[pd.to_numeric(df[col], errors="coerce") > float(val)]
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors="coerce") < float(val)]
+
+# >>> GC LEVELS — dynamic probability metrics
+# (These automatically update after filters)
+if choice == "GC Levels":
+    st.subheader("GC Levels — Dynamic Probability Metrics")
+
+    # Any boolean columns → convert to probability
+    bool_cols = [
+        c for c in df.columns
+        if any(x in c.lower() for x in ["hit", "break", "broke"])
+    ]
+
+    for col in bool_cols:
+        s = df[col].astype(str).str.lower()
+        valid = s.isin(["true", "false", "1", "0", "yes", "no"])
+        pct = None
+        if valid.any():
+            b = s.map({"true": True, "1": True, "yes": True,
+                       "false": False, "0": False, "no": False})
+            pct = 100 * b.mean()
+        if pct is not None:
+            st.markdown(f"**{col}**: {pct:.1f}%")
 
 # ---- Pivot stats (dynamic) ----
 if choice in [
@@ -343,6 +371,9 @@ elif choice in ["ES RTH Pivots", "ES ON Pivots"]:
         "hit_s3",
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
+
+# >>> GC LEVELS — no forced subset
+# (We show all columns so you can explore GC fully.)
 
 # --- Generic view-level subset ---
 if keep_cols:
