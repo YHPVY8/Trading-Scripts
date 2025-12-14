@@ -44,7 +44,6 @@ def _first_present(rec: dict, keys: list[str]):
     return None
 
 def _first_existing_datecol(rec: dict, preferred: str):
-    # prefer the passed-in date_col; if missing, try common fallbacks
     candidates = [preferred, "trade_date", "date", "time"]
     for c in candidates:
         if c in rec:
@@ -54,7 +53,6 @@ def _first_existing_datecol(rec: dict, preferred: str):
 # -------------------- Current levels (Pivot/R/S…) header block --------------------
 def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
     try:
-        # latest row
         resp = (
             sb.table(table_name)
               .select("*")
@@ -67,7 +65,6 @@ def fetch_current_levels(sb, table_name: str, date_col: str) -> dict:
             return {}
         rec = rows[0]
 
-        # if the target date_col didn't exist in the row, retry with a fallback col
         if date_col not in rec:
             fallback = _first_existing_datecol(rec, date_col)
             if fallback != date_col:
@@ -104,7 +101,6 @@ def render_current_levels(sb, choice: str, table_name: str, date_col: str):
 
     levels = fetch_current_levels(sb, table_name, date_col)
     if not any(levels.values()):
-        # Show available keys in latest row to help diagnose column case/quotes
         try:
             probe = (
                 sb.table(table_name)
@@ -143,10 +139,13 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
         s = dff[col]
         if s.dtype == bool:
             return s.astype("boolean")
+        # numeric -> >0 is True
+        if pd.api.types.is_numeric_dtype(s):
+            return (pd.to_numeric(s, errors="coerce").fillna(0) > 0).astype("boolean")
         return (
             s.astype(str).str.strip().str.lower()
-             .map({"true": True, "1": True, "yes": True, "y": True,
-                   "false": False, "0": False, "no": False, "n": False})
+             .map({"true": True, "1": True, "1.0": True, "yes": True, "y": True,
+                   "false": False, "0": False, "0.0": False, "no": False, "n": False})
              .astype("boolean")
         )
 
@@ -249,24 +248,12 @@ def render_euro_ib_metrics(df: pd.DataFrame) -> None:
 
 # -------------------- Pivot stats block (Daily / RTH / ON) --------------------
 def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
-    """
-    Compact, predictable layout using st.dataframe (no HTML/CSS).
-    Left: Pair/Either/Both (Days & Hit Pivot show value in 'Either'; 'Both' blank)
-    Right: Individual Levels (R | S)
-
-    Works for:
-      - "Daily Pivots" / "ES Daily Pivots" / "GC Daily Pivots"
-      - "Weekly Pivots" / "ES Weekly Pivots" / "GC Weekly Pivots"
-      - "ES RTH Pivots", "ES ON Pivots"
-    """
     valid = {
         "Daily Pivots","ES Daily Pivots","GC Daily Pivots",
         "Weekly Pivots","ES Weekly Pivots","GC Weekly Pivots",
         "ES RTH Pivots","ES ON Pivots",
     }
-    if choice not in valid:
-        return
-    if df is None or df.empty:
+    if choice not in valid or df is None or df.empty:
         return
 
     dff = df.copy()
@@ -281,10 +268,12 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         s = dff[colname]
         if s.dtype == bool:
             return s.astype("boolean")
+        if pd.api.types.is_numeric_dtype(s):
+            return (pd.to_numeric(s, errors="coerce").fillna(0) > 0).astype("boolean")
         return (
             s.astype(str).str.strip().str.lower()
-             .map({"true": True, "1": True, "yes": True, "y": True,
-                   "false": False, "0": False, "no": False, "n": False})
+             .map({"true": True, "1": True, "1.0": True, "yes": True, "y": True,
+                   "false": False, "0": False, "0.0": False, "no": False, "n": False})
              .astype("boolean")
         )
 
@@ -304,9 +293,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
         ("R3/S3",       _col("hit_r3"),   _col("hit_s3"),   "R3",    "S3"),
     ]
 
-    # LEFT: Pair/Either/Both
-    left_rows = []
-    left_rows.append(("Days",        f"{days:,}", ""))  # Both intentionally blank
+    left_rows = [("Days", f"{days:,}", "")]
     if c_hit_pivot:
         left_rows.append(("Hit Pivot", _rate(_to_bool(c_hit_pivot)), ""))
 
@@ -319,49 +306,32 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
 
     left_df = pd.DataFrame(left_rows, columns=["Pair", "Either", "Both"])
 
-    # RIGHT: Individual R/S
     right_rows = []
     for _, rcol, scol, rname, sname in pairs:
         r_rate = _rate(_to_bool(rcol)) if rcol else "–"
         s_rate = _rate(_to_bool(scol)) if scol else "–"
-        right_df.append if False else None  # (keeping style consistent; ignore)
         right_rows.append((f"{rname}/{sname}", r_rate, s_rate))
-
     right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
 
-    # Heights sized to rows (no spare blank)
     def _df_height(n_rows: int) -> int:
-        row_px    = 34
-        header_px = 36
-        fudge     = 0
+        row_px, header_px, fudge = 34, 36, 0
         return header_px + n_rows * row_px - fudge
 
-    left_height  = max(120, _df_height(len(left_df)))
-    right_height = max(120, _df_height(len(right_df)))
-
     left, right = st.columns([1, 1])
-
     with left:
         st.subheader("Pivot & Pair Hits")
         st.dataframe(
-            left_df,
-            hide_index=True,
-            use_container_width=False,
-            height=left_height,
+            left_df, hide_index=True, use_container_width=False, height=max(120, _df_height(len(left_df))),
             column_config={
                 "Pair":   st.column_config.TextColumn("Pair", width=220),
                 "Either": st.column_config.TextColumn("Either", width=100),
                 "Both":   st.column_config.TextColumn("Both", width=100),
             },
         )
-
     with right:
         st.subheader("Individual Levels")
         st.dataframe(
-            right_df,
-            hide_index=True,
-            use_container_width=False,
-            height=right_height,
+            right_df, hide_index=True, use_container_width=False, height=max(120, _df_height(len(right_df))),
             column_config={
                 "Level": st.column_config.TextColumn("Level", width=160),
                 "R":     st.column_config.TextColumn("R", width=100),
@@ -372,18 +342,15 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
 # ==================== GC Levels (dynamic probabilities for specified fields) ====================
 _WEEKDAY_ABBR = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
-def _cols_ci(df: pd.DataFrame):
-    return {c.lower(): c for c in df.columns}
-
 def _normalize_key(s: str) -> str:
     """
     Case/space/punct-insensitive key:
     - lowercases
     - replace unicode × with x
-    - remove spaces, dashes, dots, and non-alphanumerics (keep a–z, 0–9, x)
+    - remove spaces, hyphens, dots, and non-alphanumerics (keep a–z, 0–9, x)
     """
     s = s.lower().replace("×", "x")
-    s = re.sub(r"[^a-z0-9x]+", "", s)  # drop spaces, hyphens, dots, etc.
+    s = re.sub(r"[^a-z0-9x]+", "", s)
     return s
 
 def _build_ci_map(dff: pd.DataFrame) -> dict:
@@ -399,12 +366,9 @@ def _find_norm(dff: pd.DataFrame, *candidates: str) -> str | None:
     return None
 
 def _ensure_day_col(dff: pd.DataFrame) -> pd.DataFrame:
-    """Ensure a 'Day' (Mon…Sun) column exists (derived from a date-like column if missing)."""
     if "Day" in dff.columns:
         dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
         return dff
-
-    # try a few date-like columns
     for cand in ["globex_date", "trade_date", "date", "session_date", "time", "timestamp"]:
         if cand in dff.columns:
             dd = pd.to_datetime(dff[cand], errors="coerce")
@@ -412,21 +376,23 @@ def _ensure_day_col(dff: pd.DataFrame) -> pd.DataFrame:
             break
     if "Day" not in dff.columns:
         dff["Day"] = None
-
     dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
     return dff
 
 def _to_bool_series(dff: pd.DataFrame, col: str | None) -> pd.Series:
-    if not col or col not in dff: 
+    if not col or col not in dff:
         return pd.Series([], dtype="boolean")
     s = dff[col]
     if s.dtype == bool:
         return s.astype("boolean")
-    s = s.astype(str).str.strip().str.lower().map(
-        {"true": True, "1": True, "yes": True, "y": True,
-         "false": False, "0": False, "no": False, "n": False}
+    if pd.api.types.is_numeric_dtype(s):
+        return (pd.to_numeric(s, errors="coerce").fillna(0) > 0).astype("boolean")
+    return (
+        s.astype(str).str.strip().str.lower()
+         .map({"true": True, "1": True, "1.0": True, "yes": True, "y": True,
+               "false": False, "0": False, "0.0": False, "no": False, "n": False})
+         .astype("boolean")
     )
-    return s.astype("boolean")
 
 def _pct_mean_bool(s: pd.Series) -> str:
     s = s.dropna()
@@ -440,13 +406,12 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
       - aIBL Broke Premarket
       - aIBH Broke Adj RTH
       - aIBL Broke Adj RTH
-      - aIBH1.2 - Hit RTH
-      - aIBH1.5 - Hit RTH
+      - aIBH1.2 - Hit RTH      (also accepts 'aIBH1.2x - Hit RTH', 'aIBH12 hit rth', etc)
+      - aIBH1.5 - Hit RTH      (also accepts 'aIBH1.5x - Hit RTH', 'aIBH15 hit rth', etc)
       - aIBH2x  - Hit RTH
       - aIBL1.2x - Hit RTH
       - aIBL1.5x - Hit RTH
       - aIBL2x   - Hit RTH
-    No extra sidebar controls. Respects app-level filters that produced `df`.
     """
     if df is None or df.empty:
         st.info("No data in gc_levels for the current filters.")
@@ -455,7 +420,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     dff = df.copy()
     dff = _ensure_day_col(dff)
 
-    # Resolve columns by normalized names (accepts minor label variations)
     get = lambda *names: _find_norm(dff, *names)
 
     c_ibh_pm = get("aIBH Broke Premarket", "aibh broke premarket")
@@ -464,25 +428,24 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     c_ibh_adj = get("aIBH Broke Adj RTH", "aibh broke adj rth", "aibh broke adjusted rth")
     c_ibl_adj = get("aIBL Broke Adj RTH", "aibl broke adj rth", "aibl broke adjusted rth")
 
-    c_ibh_12 = get("aIBH1.2 - Hit RTH", "aibh1.2 - hit rth", "aibh12 hit rth", "aibh1_2 hit rth")
-    c_ibh_15 = get("aIBH1.5 - Hit RTH", "aibh1.5 - hit rth", "aibh15 hit rth", "aibh1_5 hit rth")
+    # Expanded variants for 1.2× and 1.5× (with/without 'x', underscore, unicode ×)
+    c_ibh_12 = get("aIBH1.2 - Hit RTH", "aIBH1.2x - Hit RTH",
+                   "aibh12 hit rth", "aibh12x hit rth", "aibh1_2 hit rth", "aibh1_2x hit rth")
+    c_ibh_15 = get("aIBH1.5 - Hit RTH", "aIBH1.5x - Hit RTH",
+                   "aibh15 hit rth", "aibh15x hit rth", "aibh1_5 hit rth", "aibh1_5x hit rth")
     c_ibh_2x = get("aIBH2x - Hit RTH",  "aibh2x - hit rth",  "aibh2x hit rth")
 
-    c_ibl_12 = get("aIBL1.2x - Hit RTH", "aibl1.2x - hit rth", "aibl12x hit rth", "aibl1_2x hit rth")
-    c_ibl_15 = get("aIBL1.5x - Hit RTH", "aibl1.5x - hit rth", "aibl15x hit rth", "aibl1_5x hit rth")
+    c_ibl_12 = get("aIBL1.2x - Hit RTH", "aibl1.2x - hit rth", "aibl12x hit rth", "aibl1_2x hit rth", "aibl12 hit rth", "aibl1_2 hit rth")
+    c_ibl_15 = get("aIBL1.5x - Hit RTH", "aibl1.5x - hit rth", "aibl15x hit rth", "aibl1_5x hit rth", "aibl15 hit rth", "aibl1_5 hit rth")
     c_ibl_2x = get("aIBL2x - Hit RTH",   "aibl2x - hit rth",   "aibl2x hit rth")
-
-    # Build tiles
-    days = len(dff)
 
     # --- Premarket breaks ---
     s_ibh_pm = _to_bool_series(dff, c_ibh_pm)
     s_ibl_pm = _to_bool_series(dff, c_ibl_pm)
     pm_either = _pct_mean_bool((s_ibh_pm | s_ibl_pm) if len(s_ibh_pm) and len(s_ibl_pm) else pd.Series(dtype="boolean"))
     pm_both   = _pct_mean_bool((s_ibh_pm & s_ibl_pm) if len(s_ibh_pm) and len(s_ibl_pm) else pd.Series(dtype="boolean"))
-
     row_pm = {
-        "Days": f"{days:,}",
+        "Days": f"{len(dff):,}",
         "aIBH Broke Premarket": _pct_mean_bool(s_ibh_pm),
         "aIBL Broke Premarket": _pct_mean_bool(s_ibl_pm),
         "Either Premarket": pm_either,
@@ -494,7 +457,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     s_ibl_adj = _to_bool_series(dff, c_ibl_adj)
     adj_either = _pct_mean_bool((s_ibh_adj | s_ibl_adj) if len(s_ibh_adj) and len(s_ibl_adj) else pd.Series(dtype="boolean"))
     adj_both   = _pct_mean_bool((s_ibh_adj & s_ibl_adj) if len(s_ibh_adj) and len(s_ibl_adj) else pd.Series(dtype="boolean"))
-
     row_adj = {
         "aIBH Broke Adj RTH": _pct_mean_bool(s_ibh_adj),
         "aIBL Broke Adj RTH": _pct_mean_bool(s_ibl_adj),
@@ -506,7 +468,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     s_ibh_12 = _to_bool_series(dff, c_ibh_12)
     s_ibh_15 = _to_bool_series(dff, c_ibh_15)
     s_ibh_2x = _to_bool_series(dff, c_ibh_2x)
-
     s_ibl_12 = _to_bool_series(dff, c_ibl_12)
     s_ibl_15 = _to_bool_series(dff, c_ibl_15)
     s_ibl_2x = _to_bool_series(dff, c_ibl_2x)
@@ -520,7 +481,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
         "aIBL 2×   — Hit RTH": _pct_mean_bool(s_ibl_2x),
     }
 
-    # Render three tidy blocks
     col1, col2, col3 = st.columns(3)
 
     def _render_block(col, title, d):
@@ -548,15 +508,7 @@ def _sb():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
 def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Sidebar control + metrics for SPX Opening Range that returns a filtered DF.
-    Renders metrics in a 2-column vertical layout:
-      - Left: Break stats
-      - Right: Extension hits (Up/Down ≥20/50/100%)
-    """
-    if df is None or df.empty:
-        return df
-    if "or_window" not in df.columns:
+    if df is None or df.empty or "or_window" not in df.columns:
         return df
 
     win = st.sidebar.selectbox("OR Window (SPX)", ["3m", "5m", "15m"], index=0, key="spx_or_window")
@@ -588,8 +540,14 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
     def _rate_from_bool(dfX, col):
         if not col or col not in dfX: return "–"
-        s = dfX[col].map(lambda v: True if str(v).strip().lower() in {"true","1","yes"} else
-                                   (False if str(v).strip().lower() in {"false","0","no"} else None))
+        s = dfX[col]
+        if pd.api.types.is_numeric_dtype(s):
+            s = (pd.to_numeric(s, errors="coerce").fillna(0) > 0)
+        else:
+            s = s.astype(str).str.strip().str.lower().map(
+                {"true": True, "1": True, "1.0": True, "yes": True, "y": True,
+                 "false": False, "0": False, "0.0": False, "no": False, "n": False}
+            )
         s = s.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
