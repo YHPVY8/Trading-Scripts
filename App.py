@@ -12,6 +12,7 @@ from views_extras import (
     spx_opening_range_filter_and_metrics,
     render_pivot_stats,
     render_spx_daily_metrics,
+    render_gc_levels,   # <-- ensure this is imported
 )
 try:
     from views_extras import render_euro_ib_metrics
@@ -49,36 +50,66 @@ else:
     keep_cols = cfg.get("keep")
     header_labels = cfg.get("labels", {})
 
+# -------- Robust loader that won't crash if the order column doesn't exist --------
+def safe_fetch_table(sb_client, tname: str, order_col: str | None, n: int):
+    """
+    Try ordering by the configured date_col; if PostgREST complains (col missing),
+    fall back to common alternatives. As a last resort, fetch without order.
+    Returns (response, effective_order_col).
+    """
+    tried = []
+    candidates = [c for c in [order_col, "trade_date", "date", "globex_date", "time"] if c]
+    # Deduplicate while preserving order
+    seen = set()
+    candidates = [c for c in candidates if not (c in seen or seen.add(c))]
+
+    last_err = None
+    for col in candidates:
+        tried.append(col)
+        try:
+            resp = (
+                sb_client.table(tname)
+                .select("*")
+                .order(col, desc=True)
+                .limit(n)
+                .execute()
+            )
+            return resp, col
+        except Exception as e:
+            last_err = e
+            continue
+
+    # Final fallback: no order
+    try:
+        resp = sb_client.table(tname).select("*").limit(n).execute()
+        return resp, None
+    except Exception as e:
+        # Surface a helpful message with what we tried
+        st.error(f"Failed to load table '{tname}'. Tried ordering by {tried} and plain fetch. Last error: {e}")
+        raise
+
 # ---- Load ----
-response = (
-    sb.table(table_name)
-    .select("*")
-    .order(date_col, desc=True)
-    .limit(limit)
-    .execute()
-)
+response, effective_order = safe_fetch_table(sb, table_name, date_col, limit)
 df = pd.DataFrame(response.data)
 
 if df.empty:
     st.error("No data returned.")
     st.stop()
 
-# --- Sort newest bottom ---
-if date_col not in df.columns:
-    for fallback in ["trade_date", "date", "time", "globex_date"]:
+# --- Decide which column is the actual date-like col in the data frame (post-fetch) ---
+if effective_order and effective_order in df.columns:
+    date_col = effective_order
+else:
+    # pick the first one that exists in the returned data
+    for fallback in ["trade_date", "date", "globex_date", "time"]:
         if fallback in df.columns:
             date_col = fallback
             break
 
+# --- Sort newest bottom (ascending) in the DataFrame ---
 if date_col in df.columns:
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.sort_values(date_col).reset_index(drop=True)
-
-# >>> GC LEVELS — ensure Day column exists
-if choice == "GC Levels":
-    if "globex_date" in df.columns:
-        df["globex_date"] = pd.to_datetime(df["globex_date"], errors="coerce")
-        df["day"] = df["globex_date"].dt.strftime("%a")
 
 # --- CLEANUP for specific datasets ---
 if choice == "Daily ES" and "id" in df.columns:
@@ -92,6 +123,13 @@ if "trade_date" in df.columns and choice != "SPX Opening Range":
     df["trade_date"] = (
         pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
     )
+
+if "globex_date" in df.columns and df["globex_date"].dtype != object:
+    # Only format if parsed; otherwise leave raw (it might be text already)
+    try:
+        df["globex_date"] = pd.to_datetime(df["globex_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
 
 # ===================== SPX Opening Range =====================
 if choice == "SPX Opening Range":
@@ -169,28 +207,6 @@ for col, op, val in filters:
     elif op == "less than":
         df = df[pd.to_numeric(df[col], errors="coerce") < float(val)]
 
-# >>> GC LEVELS — dynamic probability metrics
-# (These automatically update after filters)
-if choice == "GC Levels":
-    st.subheader("GC Levels — Dynamic Probability Metrics")
-
-    # Any boolean columns → convert to probability
-    bool_cols = [
-        c for c in df.columns
-        if any(x in c.lower() for x in ["hit", "break", "broke"])
-    ]
-
-    for col in bool_cols:
-        s = df[col].astype(str).str.lower()
-        valid = s.isin(["true", "false", "1", "0", "yes", "no"])
-        pct = None
-        if valid.any():
-            b = s.map({"true": True, "1": True, "yes": True,
-                       "false": False, "0": False, "no": False})
-            pct = 100 * b.mean()
-        if pct is not None:
-            st.markdown(f"**{col}**: {pct:.1f}%")
-
 # ---- Pivot stats (dynamic) ----
 if choice in [
     # Daily/Weekly (ES & GC)
@@ -236,6 +252,10 @@ if choice == "Euro IB":
 # ===================== SPX Daily dynamic =====================
 if choice == "SPX Daily":
     render_spx_daily_metrics(df)
+
+# ===================== GC Levels dynamic (filters + probabilities + Day support) =====================
+if choice == "GC Levels":
+    df = render_gc_levels(df)
 
 # --- Time formatting for intraday sets ---
 if "time" in df.columns:
@@ -371,9 +391,6 @@ elif choice in ["ES RTH Pivots", "ES ON Pivots"]:
         "hit_s3",
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
-
-# >>> GC LEVELS — no forced subset
-# (We show all columns so you can explore GC fully.)
 
 # --- Generic view-level subset ---
 if keep_cols:
