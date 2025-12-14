@@ -25,6 +25,15 @@ BASE_TABLES = OrderedDict({
     "GC Daily Pivots": ("gc_daily_pivot_levels", "date"),
     "GC Weekly Pivots": ("gc_weekly_pivot_levels", "date"),
 
+    # ---- NEW: GC Levels base table ----
+    # Uses 'globex_date' as the canonical date column. If your table
+    # uses a different date field (e.g., 'trade_date'), adjust here.
+    "GC Levels": {
+        "table": "gc_levels",
+        "date_col": "globex_date",
+        # keep/labels optional; renderer will derive Day and handle metrics.
+    },
+
     "ES Range Extensions": ("es_range_extensions", "date"),
     "ES RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
     "ES ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
