@@ -323,6 +323,7 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     for _, rcol, scol, rname, sname in pairs:
         r_rate = _rate(_to_bool(rcol)) if rcol else "–"
         s_rate = _rate(_to_bool(scol)) if scol else "–"
+        right_df.append if False else None  # (keeping style consistent; ignore)
         right_rows.append((f"{rname}/{sname}", r_rate, s_rate))
 
     right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
@@ -366,6 +367,169 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
                 "S":     st.column_config.TextColumn("S", width=100),
             },
         )
+
+# -------------------- GC Levels (filters + dynamic probabilities + Day support) --------------------
+_WEEKDAY_FULL = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+_WEEKDAY_ABBR = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+
+def _cols_ci(df: pd.DataFrame):
+    return {c.lower(): c for c in df.columns}
+
+def _find_ci(dff: pd.DataFrame, *candidates: str) -> str | None:
+    if dff is None or dff.empty: return None
+    m = _cols_ci(dff)
+    for cand in candidates:
+        if cand and cand.lower() in m:
+            return m[cand.lower()]
+    return None
+
+def _ensure_day_col(dff: pd.DataFrame) -> pd.DataFrame:
+    """Ensure a 'Day' (Mon…Sun) column exists. Try existing 'Day', else derive from a date column."""
+    if "Day" in dff.columns:
+        # ensure correct categorical ordering if it's already present
+        dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
+        return dff
+
+    date_col = _find_ci(dff, "globex_date", "trade_date", "date", "session_date", "time", "timestamp")
+    if date_col:
+        dd = pd.to_datetime(dff[date_col], errors="coerce")
+        day_full = dd.dt.day_name()
+        dff["Day"] = day_full.map(lambda x: x[:3] if isinstance(x, str) else None)
+    else:
+        dff["Day"] = None
+
+    dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
+    return dff
+
+def _to_bool_series(dff: pd.DataFrame, col: str | None) -> pd.Series:
+    if not col or col not in dff: 
+        return pd.Series([], dtype="boolean")
+    s = dff[col]
+    if s.dtype == bool:
+        return s.astype("boolean")
+    s = s.astype(str).str.strip().str.lower().map(
+        {"true": True, "1": True, "yes": True, "y": True,
+         "false": False, "0": False, "no": False, "n": False}
+    )
+    return s.astype("boolean")
+
+def _pct_mean_bool(s: pd.Series) -> str:
+    s = s.dropna()
+    return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
+
+def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Filters and dynamic probability tiles for the gc_levels base table.
+    Returns the filtered dataframe (with a 'Day' column).
+    Expected columns (case-insensitive if present):
+      - hit_pivot
+      - hit_r025, hit_s025
+      - hit_r05,  hit_s05
+      - hit_r1,   hit_s1
+      - hit_r15,  hit_s15
+      - hit_r2,   hit_s2
+      - hit_r3,   hit_s3
+      - Day (optional; auto-derived from a date column if missing)
+    """
+    if df is None or df.empty:
+        st.info("No data in gc_levels for the current filters.")
+        return df
+
+    dff = df.copy()
+    dff = _ensure_day_col(dff)
+
+    # ---- Sidebar filters ----
+    # Day-of-week multiselect (Mon→Sun), default to all present
+    present_days = [d for d in _WEEKDAY_ABBR if (("Day" in dff.columns) and (dff["Day"] == d).any())]
+    day_sel = st.sidebar.multiselect(
+        "Day of Week (GC Levels)",
+        options=_WEEKDAY_ABBR,
+        default=present_days if present_days else _WEEKDAY_ABBR,
+        key="gc_levels_day"
+    )
+    if day_sel:
+        dff = dff[dff["Day"].isin(day_sel)]
+
+    # Optional lookback filter by date if we can find a date-like column
+    date_col = _find_ci(dff, "globex_date", "trade_date", "date", "session_date", "time", "timestamp")
+    if date_col:
+        with st.sidebar.expander("Lookback (optional)", expanded=False):
+            days_lookback = st.slider("Days", min_value=10, max_value=1000, value=250, step=10, key="gc_levels_lookback")
+        dd = pd.to_datetime(dff[date_col], errors="coerce")
+        cutoff = (pd.to_datetime("today").normalize() - pd.Timedelta(days=days_lookback))
+        dff = dff[dd >= cutoff]
+
+    # Natural Day ordering for display
+    if "Day" in dff.columns:
+        dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
+        dff = dff.sort_values(["Day"], kind="stable").reset_index(drop=True)
+
+    # ---- Dynamic probabilities ----
+    get = lambda *names: _find_ci(dff, *names)
+
+    c_hit_pivot = get("hit_pivot")
+
+    pairs = [
+        ("R0.25/S0.25", get("hit_r025"), get("hit_s025"), "R0.25", "S0.25"),
+        ("R0.5/S0.5",   get("hit_r05"),  get("hit_s05"),  "R0.5",  "S0.5"),
+        ("R1/S1",       get("hit_r1"),   get("hit_s1"),   "R1",    "S1"),
+        ("R1.5/S1.5",   get("hit_r15"),  get("hit_s15"),  "R1.5",  "S1.5"),
+        ("R2/S2",       get("hit_r2"),   get("hit_s2"),   "R2",    "S2"),
+        ("R3/S3",       get("hit_r3"),   get("hit_s3"),   "R3",    "S3"),
+    ]
+
+    days = len(dff)
+    left_rows = [("Days", f"{days:,}", "")]
+    if c_hit_pivot:
+        left_rows.append(("Hit Pivot", _pct_mean_bool(_to_bool_series(dff, c_hit_pivot)), ""))
+
+    for label, rcol, scol, _, _ in pairs:
+        sr = _to_bool_series(dff, rcol)
+        ss = _to_bool_series(dff, scol)
+        either = _pct_mean_bool(sr | ss)
+        both   = _pct_mean_bool(sr & ss)
+        left_rows.append((f"{label} Either", either, both))
+    left_df = pd.DataFrame(left_rows, columns=["Pair", "Either", "Both"])
+
+    right_rows = []
+    for _, rcol, scol, rname, sname in pairs:
+        r_rate = _pct_mean_bool(_to_bool_series(dff, rcol)) if rcol else "–"
+        s_rate = _pct_mean_bool(_to_bool_series(dff, scol)) if scol else "–"
+        right_rows.append((f"{rname}/{sname}", r_rate, s_rate))
+    right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
+
+    def _df_height(n_rows: int) -> int:
+        row_px, header_px, fudge = 34, 36, 0
+        return max(120, header_px + n_rows * row_px - fudge)
+
+    st.markdown("### GC Levels — Dynamic Probabilities")
+    colL, colR = st.columns(2)
+    with colL:
+        st.subheader("Pairs / Either / Both")
+        st.dataframe(
+            left_df, hide_index=True, use_container_width=False, height=_df_height(len(left_df)),
+            column_config={
+                "Pair":   st.column_config.TextColumn("Pair", width=220),
+                "Either": st.column_config.TextColumn("Either", width=100),
+                "Both":   st.column_config.TextColumn("Both", width=100),
+            },
+        )
+    with colR:
+        st.subheader("Individual Levels")
+        st.dataframe(
+            right_df, hide_index=True, use_container_width=False, height=_df_height(len(right_df)),
+            column_config={
+                "Level": st.column_config.TextColumn("Level", width=160),
+                "R":     st.column_config.TextColumn("R", width=100),
+                "S":     st.column_config.TextColumn("S", width=100),
+            },
+        )
+
+    # Optional: show the filtered raw table with Day and natural sort
+    with st.expander("Show filtered gc_levels rows"):
+        st.dataframe(dff, hide_index=True, use_container_width=True)
+
+    return dff
 
 # -------------------- SPX Opening Range (filter + header tiles) --------------------
 def _sb():
@@ -419,7 +583,7 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     def _rate_from_numeric(dfX, col, thr):
-        if not col or col not in dfX: return "–"
+        if not col or not (col in dfX): return "–"
         s = pd.to_numeric(dfX[col], errors="coerce").dropna()
         return "–" if s.empty else f"{100.0 * (s >= thr).mean():.1f}%"
 
