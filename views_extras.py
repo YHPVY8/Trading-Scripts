@@ -323,7 +323,6 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
     for _, rcol, scol, rname, sname in pairs:
         r_rate = _rate(_to_bool(rcol)) if rcol else "–"
         s_rate = _rate(_to_bool(scol)) if scol else "–"
-        right_df.append if False else None  # (keeping style consistent; ignore)
         right_rows.append((f"{rname}/{sname}", r_rate, s_rate))
 
     right_df = pd.DataFrame(right_rows, columns=["Level", "R", "S"])
