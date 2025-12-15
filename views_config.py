@@ -100,17 +100,18 @@ BASE_TABLES = OrderedDict({
         "keep": [
             "trade_date", "day",
             "aibh_broke_premarket", "aibl_broke_premarket",
+            "aib_mid_hit_premarket",  # <- moved here, immediately after aIBL Hit Premarket
             "aibh_broke_adj_rth",   "aibl_broke_adj_rth",
             "aibh12x_hit_rth", "aibh15x_hit_rth", "aibh2x_hit_rth",
             "aibl12x_hit_rth", "aibl15x_hit_rth", "aibl2x_hit_rth",
-            # NEW fields to show in the table:
-            "aib_mid", "aib_mid_hit_premarket",
+            "aib_mid",  # aIB Mid value (kept in table; order after the RTH stats)
         ],
         "labels": {
             "trade_date": "Date",
             "day": "Day",
             "aibh_broke_premarket": "aIBH Hit Premarket",
             "aibl_broke_premarket": "aIBL Hit Premarket",
+            "aib_mid_hit_premarket": "aIB Mid Hit Premarket",
             "aibh_broke_adj_rth":   "aIBH Hit RTH",
             "aibl_broke_adj_rth":   "aIBL Hit RTH",
             "aibh12x_hit_rth": "aIBH1.2x - RTH",
@@ -119,9 +120,7 @@ BASE_TABLES = OrderedDict({
             "aibl12x_hit_rth": "aIBL1.2x - RTH",
             "aibl15x_hit_rth": "aIBL1.5x - RTH",
             "aibl2x_hit_rth":  "aIBL2x - RTH",
-            # NEW labels:
             "aib_mid": "aIB Mid",
-            "aib_mid_hit_premarket": "aIB Mid Hit Premarket",
         },
     },
 })
