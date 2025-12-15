@@ -93,37 +93,35 @@ BASE_TABLES = OrderedDict({
         },
     },
 
-    # ---- GC Levels (ONLY the listed fields + label renames) ----
+    # ---- GC Levels (base) ----
     "GC Levels": {
         "table": "gc_levels",
         "date_col": "trade_date",
         "keep": [
-            "trade_date",
-            "day",
-            "aibh_broke_premarket",
-            "aibl_broke_premarket",
-            "aibh_broke_adj_rth",
-            "aibl_broke_adj_rth",
-            "aibh12x_hit_rth",
-            "aibh15x_hit_rth",
-            "aibh2x_hit_rth",
-            "aibl12x_hit_rth",
-            "aibl15x_hit_rth",
-            "aibl2x_hit_rth",
+            "trade_date", "day",
+            "aibh_broke_premarket", "aibl_broke_premarket",
+            "aibh_broke_adj_rth",   "aibl_broke_adj_rth",
+            "aibh12x_hit_rth", "aibh15x_hit_rth", "aibh2x_hit_rth",
+            "aibl12x_hit_rth", "aibl15x_hit_rth", "aibl2x_hit_rth",
+            # NEW fields to show in the table:
+            "aib_mid", "aib_mid_hit_premarket",
         ],
         "labels": {
             "trade_date": "Date",
             "day": "Day",
             "aibh_broke_premarket": "aIBH Hit Premarket",
             "aibl_broke_premarket": "aIBL Hit Premarket",
-            "aibh_broke_adj_rth": "aIBH Hit RTH",
-            "aibl_broke_adj_rth": "aIBL Hit RTH",
+            "aibh_broke_adj_rth":   "aIBH Hit RTH",
+            "aibl_broke_adj_rth":   "aIBL Hit RTH",
             "aibh12x_hit_rth": "aIBH1.2x - RTH",
             "aibh15x_hit_rth": "aIBH1.5x - RTH",
             "aibh2x_hit_rth":  "aIBH 2x - RTH",
             "aibl12x_hit_rth": "aIBL1.2x - RTH",
             "aibl15x_hit_rth": "aIBL1.5x - RTH",
             "aibl2x_hit_rth":  "aIBL2x - RTH",
+            # NEW labels:
+            "aib_mid": "aIB Mid",
+            "aib_mid_hit_premarket": "aIB Mid Hit Premarket",
         },
     },
 })
@@ -135,6 +133,7 @@ def _load_yaml_views(path="views.yaml"):
         return []
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+    # Expecting a list under "views" or a dict; be flexible
     if isinstance(data, dict):
         return data.get("views", [])
     if isinstance(data, list):
@@ -161,6 +160,8 @@ def build_tables(sb, cache_bust: int | None = None):
       1) BASE_TABLES (always included),
       2) views from Supabase (dashboard_views), and
       3) optional YAML views (views.yaml).
+
+    No Streamlit cache here to avoid stale registries.
     """
     tables = OrderedDict(BASE_TABLES)
 
