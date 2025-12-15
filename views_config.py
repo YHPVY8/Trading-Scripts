@@ -99,27 +99,47 @@ BASE_TABLES = OrderedDict({
         "date_col": "trade_date",
         "keep": [
             "trade_date", "day",
-            "aibh_broke_premarket", "aibl_broke_premarket",
-            "aib_mid_hit_premarket",  # <- moved here, immediately after aIBL Hit Premarket
-            "aibh_broke_adj_rth",   "aibl_broke_adj_rth",
-            "aibh12x_hit_rth", "aibh15x_hit_rth", "aibh2x_hit_rth",
-            "aibl12x_hit_rth", "aibl15x_hit_rth", "aibl2x_hit_rth",
-            "aib_mid",  # aIB Mid value (kept in table; order after the RTH stats)
+
+            # ---- Premarket ----
+            "aibh_broke_premarket",
+            "aibl_broke_premarket",
+            "aib_mid_hit_premarket",
+
+            # ---- RTH Breaks ----
+            "aibh_broke_adj_rth",
+            "aibl_broke_adj_rth",
+            "aib_mid_hit_rth",        # <-- NEW FIELD placed right after aIBL Hit RTH
+
+            # ---- Extension Hits ----
+            "aibh12x_hit_rth",
+            "aibh15x_hit_rth",
+            "aibh2x_hit_rth",
+            "aibl12x_hit_rth",
+            "aibl15x_hit_rth",
+            "aibl2x_hit_rth",
+
+            # ---- Mid Level (raw value) ----
+            "aib_mid",
         ],
         "labels": {
             "trade_date": "Date",
             "day": "Day",
+
             "aibh_broke_premarket": "aIBH Hit Premarket",
             "aibl_broke_premarket": "aIBL Hit Premarket",
             "aib_mid_hit_premarket": "aIB Mid Hit Premarket",
-            "aibh_broke_adj_rth":   "aIBH Hit RTH",
-            "aibl_broke_adj_rth":   "aIBL Hit RTH",
+
+            "aibh_broke_adj_rth": "aIBH Hit RTH",
+            "aibl_broke_adj_rth": "aIBL Hit RTH",
+            "aib_mid_hit_rth": "aIB Mid Hit RTH",     # <-- NEW label
+
             "aibh12x_hit_rth": "aIBH1.2x - RTH",
             "aibh15x_hit_rth": "aIBH1.5x - RTH",
             "aibh2x_hit_rth":  "aIBH 2x - RTH",
             "aibl12x_hit_rth": "aIBL1.2x - RTH",
             "aibl15x_hit_rth": "aIBL1.5x - RTH",
             "aibl2x_hit_rth":  "aIBL2x - RTH",
+
             "aib_mid": "aIB Mid",
         },
     },
@@ -132,7 +152,6 @@ def _load_yaml_views(path="views.yaml"):
         return []
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    # Expecting a list under "views" or a dict; be flexible
     if isinstance(data, dict):
         return data.get("views", [])
     if isinstance(data, list):
@@ -154,17 +173,8 @@ def _load_db_views(sb):
         return []
 
 def build_tables(sb, cache_bust: int | None = None):
-    """
-    Merge:
-      1) BASE_TABLES (always included),
-      2) views from Supabase (dashboard_views), and
-      3) optional YAML views (views.yaml).
-
-    No Streamlit cache here to avoid stale registries.
-    """
     tables = OrderedDict(BASE_TABLES)
 
-    # 2) DB views
     for r in _load_db_views(sb):
         view_name = r.get("view_name")
         table     = r.get("table_name")
@@ -177,7 +187,6 @@ def build_tables(sb, cache_bust: int | None = None):
             "labels": r.get("labels") or {},
         }
 
-    # 3) YAML views (optional)
     for v in _load_yaml_views():
         view_name = v.get("view_name")
         table     = v.get("table")
