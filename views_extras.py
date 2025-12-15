@@ -1,4 +1,3 @@
-# views_extras.py
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -404,14 +403,11 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     Uses ONLY these True/False fields (case/spacing tolerant):
       - aIBH Broke Premarket
       - aIBL Broke Premarket
+      - aIB Mid Hit Premarket
       - aIBH Broke Adj RTH
       - aIBL Broke Adj RTH
-      - aIBH1.2 - Hit RTH      (also accepts 'aIBH1.2x - Hit RTH', 'aIBH12 hit rth', etc)
-      - aIBH1.5 - Hit RTH      (also accepts 'aIBH1.5x - Hit RTH', 'aIBH15 hit rth', etc)
-      - aIBH2x  - Hit RTH
-      - aIBL1.2x - Hit RTH
-      - aIBL1.5x - Hit RTH
-      - aIBL2x   - Hit RTH
+      - aIBH1.2 - Hit RTH / aIBH1.5 - Hit RTH / aIBH2x - Hit RTH
+      - aIBL1.2x - Hit RTH / aIBL1.5x - Hit RTH / aIBL2x - Hit RTH
     """
     if df is None or df.empty:
         st.info("No data in gc_levels for the current filters.")
@@ -422,8 +418,9 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
 
     get = lambda *names: _find_norm(dff, *names)
 
-    c_ibh_pm = get("aIBH Broke Premarket", "aibh broke premarket")
-    c_ibl_pm = get("aIBL Broke Premarket", "aibl broke premarket")
+    c_ibh_pm  = get("aIBH Broke Premarket", "aibh broke premarket")
+    c_ibl_pm  = get("aIBL Broke Premarket", "aibl broke premarket")
+    c_mid_pm  = get("aIB Mid Hit Premarket", "aib mid hit premarket", "aib_mid_hit_premarket")
 
     c_ibh_adj = get("aIBH Broke Adj RTH", "aibh broke adj rth", "aibh broke adjusted rth")
     c_ibl_adj = get("aIBL Broke Adj RTH", "aibl broke adj rth", "aibl broke adjusted rth")
@@ -442,14 +439,19 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     # --- Premarket breaks ---
     s_ibh_pm = _to_bool_series(dff, c_ibh_pm)
     s_ibl_pm = _to_bool_series(dff, c_ibl_pm)
+    s_mid_pm = _to_bool_series(dff, c_mid_pm)
+
     pm_either = _pct_mean_bool((s_ibh_pm | s_ibl_pm) if len(s_ibh_pm) and len(s_ibl_pm) else pd.Series(dtype="boolean"))
     pm_both   = _pct_mean_bool((s_ibh_pm & s_ibl_pm) if len(s_ibh_pm) and len(s_ibl_pm) else pd.Series(dtype="boolean"))
+
     row_pm = {
         "Days": f"{len(dff):,}",
         "aIBH Broke Premarket": _pct_mean_bool(s_ibh_pm),
         "aIBL Broke Premarket": _pct_mean_bool(s_ibl_pm),
         "Either Premarket": pm_either,
         "Both Premarket":   pm_both,
+        # NEW line at the bottom of Premarket Breaks:
+        "aIB Mid Hit Premarket": _pct_mean_bool(s_mid_pm),
     }
 
     # --- Adjusted RTH breaks ---
@@ -579,7 +581,7 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
     dn20  = _find_col_ci(["hit_20_down",  "hitdn20",  "hit_down20",  "down20",  "or_dn_20",  "hit_or_dn_20"])
     dn50  = _find_col_ci(["hit_50_down",  "hitdn50",  "hit_down50",  "down50",  "or_dn_50",  "hit_or_dn_50"])
-    dn100 = _find_col_ci(["hit_100_down", "hitdn100", "hit_down100", "down100", "or_dn_100", "hit_or_dn_100"])
+    dn100 = _find_col_ci(["hit_100_down", "hitdn100", "hit_down100", "down100", "or_dn_100"])
 
     max_up = _find_col_ci(["max_ext_up", "max_up_ext", "max_up_frac", "max_up_or_mult"])
     max_dn = _find_col_ci(["max_ext_down", "max_dn_ext", "max_dn_frac", "max_dn_or_mult"])
