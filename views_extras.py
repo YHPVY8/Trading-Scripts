@@ -425,6 +425,9 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     c_ibh_adj = get("aIBH Broke Adj RTH", "aibh broke adj rth", "aibh broke adjusted rth")
     c_ibl_adj = get("aIBL Broke Adj RTH", "aibl broke adj rth", "aibl broke adjusted rth")
 
+    # NEW: aIB Mid Hit RTH
+    c_mid_rth = get("aIB Mid Hit RTH", "aib mid hit rth", "aib_mid_hit_rth")
+
     # Expanded variants for 1.2× and 1.5× (with/without 'x', underscore, unicode ×)
     c_ibh_12 = get("aIBH1.2 - Hit RTH", "aIBH1.2x - Hit RTH",
                    "aibh12 hit rth", "aibh12x hit rth", "aibh1_2 hit rth", "aibh1_2x hit rth")
@@ -457,13 +460,18 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     # --- Adjusted RTH breaks ---
     s_ibh_adj = _to_bool_series(dff, c_ibh_adj)
     s_ibl_adj = _to_bool_series(dff, c_ibl_adj)
+    s_mid_rth = _to_bool_series(dff, c_mid_rth)
+
     adj_either = _pct_mean_bool((s_ibh_adj | s_ibl_adj) if len(s_ibh_adj) and len(s_ibl_adj) else pd.Series(dtype="boolean"))
     adj_both   = _pct_mean_bool((s_ibh_adj & s_ibl_adj) if len(s_ibh_adj) and len(s_ibl_adj) else pd.Series(dtype="boolean"))
+
     row_adj = {
         "aIBH Broke Adj RTH": _pct_mean_bool(s_ibh_adj),
         "aIBL Broke Adj RTH": _pct_mean_bool(s_ibl_adj),
         "Either Adj RTH": adj_either,
         "Both Adj RTH":   adj_both,
+        # NEW line at the bottom of Adjusted RTH Breaks:
+        "aIB Mid Hit RTH": _pct_mean_bool(s_mid_rth),
     }
 
     # --- RTH Extension Hits ---
