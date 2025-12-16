@@ -106,7 +106,6 @@ BASE_TABLES = OrderedDict({
         "aib_mid_hit_rth",
         "aibh12x_hit_rth", "aibh15x_hit_rth", "aibh2x_hit_rth",
         "aibl12x_hit_rth", "aibl15x_hit_rth", "aibl2x_hit_rth",
-        "aib_mid",
     ],
     "labels": {
         "trade_date": "Date",
