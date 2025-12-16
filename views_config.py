@@ -99,11 +99,8 @@ BASE_TABLES = OrderedDict({
     "date_col": "trade_date",
     "keep": [
         "trade_date", "day",
-
-        # NEW: ON levels + hits (put wherever you want; here near top)
         "onh", "onl",
         "broke_onh", "broke_onl",
-
         "aibh_broke_premarket", "aibl_broke_premarket",
         "aib_mid_hit_premarket",
         "aibh_broke_adj_rth", "aibl_broke_adj_rth",
