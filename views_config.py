@@ -94,55 +94,49 @@ BASE_TABLES = OrderedDict({
     },
 
     # ---- GC Levels (base) ----
-    "GC Levels": {
-        "table": "gc_levels",
-        "date_col": "trade_date",
-        "keep": [
-            "trade_date", "day",
+"GC Levels": {
+    "table": "gc_levels",
+    "date_col": "trade_date",
+    "keep": [
+        "trade_date", "day",
 
-            "aibh_broke_premarket", "aibl_broke_premarket",
-            "aib_mid_hit_premarket",
+        # NEW: ON levels + hits (put wherever you want; here near top)
+        "onh", "onl",
+        "broke_onh", "broke_onl",
 
-            "aibh_broke_adj_rth", "aibl_broke_adj_rth",
-            "aib_mid_hit_rth",
+        "aibh_broke_premarket", "aibl_broke_premarket",
+        "aib_mid_hit_premarket",
+        "aibh_broke_adj_rth", "aibl_broke_adj_rth",
+        "aib_mid_hit_rth",
+        "aibh12x_hit_rth", "aibh15x_hit_rth", "aibh2x_hit_rth",
+        "aibl12x_hit_rth", "aibl15x_hit_rth", "aibl2x_hit_rth",
+        "aib_mid",
+    ],
+    "labels": {
+        "trade_date": "Date",
+        "day": "Day",
 
-            # ---- NEW: Overnight levels + touched during Adj RTH ----
-            "onh", "onl",
-            "broke_onh", "broke_onl",
+        # NEW labels
+        "onh": "ONH",
+        "onl": "ONL",
+        "broke_onh": "Hit ONH",
+        "broke_onl": "Hit ONL",
 
-            "aibh12x_hit_rth", "aibh15x_hit_rth", "aibh2x_hit_rth",
-            "aibl12x_hit_rth", "aibl15x_hit_rth", "aibl2x_hit_rth",
-
-            "aib_mid",
-        ],
-        "labels": {
-            "trade_date": "Date",
-            "day": "Day",
-
-            "aibh_broke_premarket": "aIBH Hit Premarket",
-            "aibl_broke_premarket": "aIBL Hit Premarket",
-            "aib_mid_hit_premarket": "aIB Mid Hit Premarket",
-
-            "aibh_broke_adj_rth":   "aIBH Hit RTH",
-            "aibl_broke_adj_rth":   "aIBL Hit RTH",
-            "aib_mid_hit_rth":      "aIB Mid Hit RTH",
-
-            # ---- NEW labels ----
-            "onh": "ONH",
-            "onl": "ONL",
-            "broke_onh": "ONH Hit RTH",
-            "broke_onl": "ONL Hit RTH",
-
-            "aibh12x_hit_rth": "aIBH1.2x - RTH",
-            "aibh15x_hit_rth": "aIBH1.5x - RTH",
-            "aibh2x_hit_rth":  "aIBH 2x - RTH",
-            "aibl12x_hit_rth": "aIBL1.2x - RTH",
-            "aibl15x_hit_rth": "aIBL1.5x - RTH",
-            "aibl2x_hit_rth":  "aIBL2x - RTH",
-
-            "aib_mid": "aIB Mid",
-        },
+        "aibh_broke_premarket": "aIBH Hit Premarket",
+        "aibl_broke_premarket": "aIBL Hit Premarket",
+        "aib_mid_hit_premarket": "aIB Mid Hit Premarket",
+        "aibh_broke_adj_rth":   "aIBH Hit RTH",
+        "aibl_broke_adj_rth":   "aIBL Hit RTH",
+        "aib_mid_hit_rth":      "aIB Mid Hit RTH",
+        "aibh12x_hit_rth": "aIBH1.2x - RTH",
+        "aibh15x_hit_rth": "aIBH1.5x - RTH",
+        "aibh2x_hit_rth":  "aIBH 2x - RTH",
+        "aibl12x_hit_rth": "aIBL1.2x - RTH",
+        "aibl15x_hit_rth": "aIBL1.5x - RTH",
+        "aibl2x_hit_rth":  "aIBL2x - RTH",
+        "aib_mid": "aIB Mid",
     },
+},
 })
 
 def _load_yaml_views(path="views.yaml"):
