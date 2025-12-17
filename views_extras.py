@@ -16,7 +16,7 @@ LEVEL_ALIASES = [
     ("R2",    ["R2",  "r2"]),
     ("S2",    ["S2",  "s2"]),
     ("R3",    ["R3","r3"]),
-    ("S3",    ["S3","s3"]),
+    ("S3",    ["S3","r3"]),
 ]
 
 # Tables we consider “pivot level” sets (ES + GC)
@@ -400,14 +400,11 @@ def _pct_mean_bool(s: pd.Series) -> str:
 def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     """
     Dynamic probability tiles for the gc_levels base table (Gold).
-    Uses ONLY these True/False fields (case/spacing tolerant):
-      - aIBH Broke Premarket
-      - aIBL Broke Premarket
-      - aIB Mid Hit Premarket
-      - aIBH Broke Adj RTH
-      - aIBL Broke Adj RTH
-      - aIBH1.2 - Hit RTH / aIBH1.5 - Hit RTH / aIBH2x - Hit RTH
-      - aIBL1.2x - Hit RTH / aIBL1.5x - Hit RTH / aIBL2x - Hit RTH
+    Includes:
+      - Premarket Breaks
+      - Adjusted RTH Breaks
+      - RTH Extension Hits
+      - ON Extreme Stats (Break ONH/ONL + Either/Both)
     """
     if df is None or df.empty:
         st.info("No data in gc_levels for the current filters.")
@@ -418,26 +415,29 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
 
     get = lambda *names: _find_norm(dff, *names)
 
-    c_ibh_pm  = get("aIBH Broke Premarket", "aibh broke premarket")
-    c_ibl_pm  = get("aIBL Broke Premarket", "aibl broke premarket")
+    # --- Premarket/AdjRTH/Extensions (existing) ---
+    c_ibh_pm  = get("aIBH Broke Premarket", "aibh broke premarket", "aibh_broke_premarket")
+    c_ibl_pm  = get("aIBL Broke Premarket", "aibl broke premarket", "aibl_broke_premarket")
     c_mid_pm  = get("aIB Mid Hit Premarket", "aib mid hit premarket", "aib_mid_hit_premarket")
 
-    c_ibh_adj = get("aIBH Broke Adj RTH", "aibh broke adj rth", "aibh broke adjusted rth")
-    c_ibl_adj = get("aIBL Broke Adj RTH", "aibl broke adj rth", "aibl broke adjusted rth")
+    c_ibh_adj = get("aIBH Broke Adj RTH", "aibh broke adj rth", "aibh broke adjusted rth", "aibh_broke_adj_rth")
+    c_ibl_adj = get("aIBL Broke Adj RTH", "aibl broke adj rth", "aibl broke adjusted rth", "aibl_broke_adj_rth")
 
-    # NEW: aIB Mid Hit RTH
     c_mid_rth = get("aIB Mid Hit RTH", "aib mid hit rth", "aib_mid_hit_rth")
 
-    # Expanded variants for 1.2× and 1.5× (with/without 'x', underscore, unicode ×)
     c_ibh_12 = get("aIBH1.2 - Hit RTH", "aIBH1.2x - Hit RTH",
-                   "aibh12 hit rth", "aibh12x hit rth", "aibh1_2 hit rth", "aibh1_2x hit rth")
+                   "aibh12 hit rth", "aibh12x hit rth", "aibh1_2 hit rth", "aibh1_2x hit rth", "aibh12x_hit_rth")
     c_ibh_15 = get("aIBH1.5 - Hit RTH", "aIBH1.5x - Hit RTH",
-                   "aibh15 hit rth", "aibh15x hit rth", "aibh1_5 hit rth", "aibh1_5x hit rth")
-    c_ibh_2x = get("aIBH2x - Hit RTH",  "aibh2x - hit rth",  "aibh2x hit rth")
+                   "aibh15 hit rth", "aibh15x hit rth", "aibh1_5 hit rth", "aibh1_5x hit rth", "aibh15x_hit_rth")
+    c_ibh_2x = get("aIBH2x - Hit RTH",  "aibh2x - hit rth",  "aibh2x hit rth", "aibh2x_hit_rth")
 
-    c_ibl_12 = get("aIBL1.2x - Hit RTH", "aibl1.2x - hit rth", "aibl12x hit rth", "aibl1_2x hit rth", "aibl12 hit rth", "aibl1_2 hit rth")
-    c_ibl_15 = get("aIBL1.5x - Hit RTH", "aibl1.5x - hit rth", "aibl15x hit rth", "aibl1_5x hit rth", "aibl15 hit rth", "aibl1_5 hit rth")
-    c_ibl_2x = get("aIBL2x - Hit RTH",   "aibl2x - hit rth",   "aibl2x hit rth")
+    c_ibl_12 = get("aIBL1.2x - Hit RTH", "aibl1.2x - hit rth", "aibl12x hit rth", "aibl1_2x hit rth", "aibl12 hit rth", "aibl1_2 hit rth", "aibl12x_hit_rth")
+    c_ibl_15 = get("aIBL1.5x - Hit RTH", "aibl1.5x - hit rth", "aibl15x hit rth", "aibl1_5x hit rth", "aibl15 hit rth", "aibl1_5 hit rth", "aibl15x_hit_rth")
+    c_ibl_2x = get("aIBL2x - Hit RTH",   "aibl2x - hit rth",   "aibl2x hit rth", "aibl2x_hit_rth")
+
+    # --- NEW: ON extremes (your DB fields) ---
+    c_onh = get("broke_onh", "Broke ONH", "Hit ONH")
+    c_onl = get("broke_onl", "Broke ONL", "Hit ONL")
 
     # --- Premarket breaks ---
     s_ibh_pm = _to_bool_series(dff, c_ibh_pm)
@@ -453,7 +453,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
         "aIBL Broke Premarket": _pct_mean_bool(s_ibl_pm),
         "Either Premarket": pm_either,
         "Both Premarket":   pm_both,
-        # NEW line at the bottom of Premarket Breaks:
         "aIB Mid Hit Premarket": _pct_mean_bool(s_mid_pm),
     }
 
@@ -470,7 +469,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
         "aIBL Broke Adj RTH": _pct_mean_bool(s_ibl_adj),
         "Either Adj RTH": adj_either,
         "Both Adj RTH":   adj_both,
-        # NEW line at the bottom of Adjusted RTH Breaks:
         "aIB Mid Hit RTH": _pct_mean_bool(s_mid_rth),
     }
 
@@ -491,7 +489,21 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
         "aIBL 2×   — Hit RTH": _pct_mean_bool(s_ibl_2x),
     }
 
-    col1, col2, col3 = st.columns(3)
+    # --- NEW: ON extreme stats ---
+    s_onh = _to_bool_series(dff, c_onh)
+    s_onl = _to_bool_series(dff, c_onl)
+
+    on_either = _pct_mean_bool((s_onh | s_onl) if len(s_onh) and len(s_onl) else pd.Series(dtype="boolean"))
+    on_both   = _pct_mean_bool((s_onh & s_onl) if len(s_onh) and len(s_onl) else pd.Series(dtype="boolean"))
+
+    row_on = {
+        "Break ONH": _pct_mean_bool(s_onh),
+        "Break ONL": _pct_mean_bool(s_onl),
+        "Break Either ON": on_either,
+        "Break Both ON":   on_both,
+    }
+
+    col1, col2, col3, col4 = st.columns(4)
 
     def _render_block(col, title, d):
         with col:
@@ -509,6 +521,7 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     _render_block(col1, "Premarket Breaks", row_pm)
     _render_block(col2, "Adjusted RTH Breaks", row_adj)
     _render_block(col3, "RTH Extension Hits", row_hits)
+    _render_block(col4, "ON Extreme Stats", row_on)
 
     return dff
 
