@@ -10,6 +10,7 @@ from views_config import build_tables
 from views_extras import (
     render_current_levels,
     spx_opening_range_filter_and_metrics,
+    gc_opening_range_filter_and_metrics,  # ✅ NEW
     render_pivot_stats,
     render_spx_daily_metrics,
     render_gc_levels,   # <-- ensure this is imported
@@ -119,7 +120,7 @@ if choice == "Daily ES" and "id" in df.columns:
 if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
-if "trade_date" in df.columns and choice != "SPX Opening Range":
+if "trade_date" in df.columns and choice not in ["SPX Opening Range", "GC Opening Range"]:
     df["trade_date"] = (
         pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
     )
@@ -136,6 +137,43 @@ if choice == "SPX Opening Range":
     df = spx_opening_range_filter_and_metrics(df)
     if df.empty:
         st.info("No rows after applying the SPX window filter.")
+        st.stop()
+
+    desired_order = [
+        "trade_date",
+        "day_of_week",
+        "open_location",
+        "symbol",
+        "or_window",
+        "orh",
+        "orl",
+        "or_range",
+        "first_break",
+        "broke_up",
+        "broke_down",
+        "broke_both",
+        "hit_20_up",
+        "hit_20_down",
+        "hit_50_up",
+        "hit_50_down",
+        "hit_100_up",
+        "hit_100_down",
+        "max_ext_up",
+        "max_ext_down",
+        "time_to_first_break_seconds",
+    ]
+    df = df[[c for c in desired_order if c in df.columns]]
+
+    if "trade_date" in df.columns:
+        df["trade_date"] = (
+            pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+        )
+
+# ===================== GC Opening Range =====================
+if choice == "GC Opening Range":
+    df = gc_opening_range_filter_and_metrics(df)
+    if df.empty:
+        st.info("No rows after applying the GC window filter.")
         st.stop()
 
     desired_order = [
