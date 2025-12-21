@@ -30,6 +30,9 @@ BASE_TABLES = OrderedDict({
     "ES ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
     "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
 
+    # ✅ NEW: GC Opening Range
+    "GC Opening Range": ("gc_opening_range_stats", "trade_date"),
+
     # ---- SPX Daily ----
     "SPX Daily": {
         "table": "spx_daily",
