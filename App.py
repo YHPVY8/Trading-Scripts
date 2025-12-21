@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client
+from typing import Optional
 
 # import the tables/view builder
 from views_config import build_tables
@@ -10,11 +11,12 @@ from views_config import build_tables
 from views_extras import (
     render_current_levels,
     spx_opening_range_filter_and_metrics,
-    gc_opening_range_filter_and_metrics,  # ✅ NEW
+    gc_opening_range_filter_and_metrics,
     render_pivot_stats,
     render_spx_daily_metrics,
-    render_gc_levels,   # <-- ensure this is imported
+    render_gc_levels,
 )
+
 try:
     from views_extras import render_euro_ib_metrics
 except Exception:
@@ -35,9 +37,7 @@ st.title("Trading Dashboard")
 
 # ---- Sidebar ----
 choice = st.sidebar.selectbox("Select data set", list(TABLES.keys()))
-limit = st.sidebar.number_input(
-    "Number of rows to load", value=1000, min_value=100, step=100
-)
+limit = st.sidebar.number_input("Number of rows to load", value=1000, min_value=100, step=100)
 
 # Normalize tuple/dict config
 cfg = TABLES[choice]
@@ -52,19 +52,12 @@ else:
     header_labels = cfg.get("labels", {})
 
 # -------- Robust loader that won't crash if the order column doesn't exist --------
-def safe_fetch_table(sb_client, tname: str, order_col: str | None, n: int):
-    """
-    Try ordering by the configured date_col; if PostgREST complains (col missing),
-    fall back to common alternatives. As a last resort, fetch without order.
-    Returns (response, effective_order_col).
-    """
+def safe_fetch_table(sb_client, tname: str, order_col: Optional[str], n: int):
     tried = []
     candidates = [c for c in [order_col, "trade_date", "date", "globex_date", "time"] if c]
-    # Deduplicate while preserving order
     seen = set()
     candidates = [c for c in candidates if not (c in seen or seen.add(c))]
 
-    last_err = None
     for col in candidates:
         tried.append(col)
         try:
@@ -76,16 +69,13 @@ def safe_fetch_table(sb_client, tname: str, order_col: str | None, n: int):
                 .execute()
             )
             return resp, col
-        except Exception as e:
-            last_err = e
+        except Exception:
             continue
 
-    # Final fallback: no order
     try:
         resp = sb_client.table(tname).select("*").limit(n).execute()
         return resp, None
     except Exception as e:
-        # Surface a helpful message with what we tried
         st.error(f"Failed to load table '{tname}'. Tried ordering by {tried} and plain fetch. Last error: {e}")
         raise
 
@@ -101,7 +91,6 @@ if df.empty:
 if effective_order and effective_order in df.columns:
     date_col = effective_order
 else:
-    # pick the first one that exists in the returned data
     for fallback in ["trade_date", "date", "globex_date", "time"]:
         if fallback in df.columns:
             date_col = fallback
@@ -121,12 +110,9 @@ if "date" in df.columns:
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 if "trade_date" in df.columns and choice not in ["SPX Opening Range", "GC Opening Range"]:
-    df["trade_date"] = (
-        pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-    )
+    df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 if "globex_date" in df.columns and df["globex_date"].dtype != object:
-    # Only format if parsed; otherwise leave raw (it might be text already)
     try:
         df["globex_date"] = pd.to_datetime(df["globex_date"], errors="coerce").dt.strftime("%Y-%m-%d")
     except Exception:
@@ -140,34 +126,16 @@ if choice == "SPX Opening Range":
         st.stop()
 
     desired_order = [
-        "trade_date",
-        "day_of_week",
-        "open_location",
-        "symbol",
-        "or_window",
-        "orh",
-        "orl",
-        "or_range",
-        "first_break",
-        "broke_up",
-        "broke_down",
-        "broke_both",
-        "hit_20_up",
-        "hit_20_down",
-        "hit_50_up",
-        "hit_50_down",
-        "hit_100_up",
-        "hit_100_down",
-        "max_ext_up",
-        "max_ext_down",
-        "time_to_first_break_seconds",
+        "trade_date","day_of_week","open_location","symbol","or_window",
+        "orh","orl","or_range","first_break",
+        "broke_up","broke_down","broke_both",
+        "hit_20_up","hit_20_down","hit_50_up","hit_50_down","hit_100_up","hit_100_down",
+        "max_ext_up","max_ext_down","time_to_first_break_seconds",
     ]
     df = df[[c for c in desired_order if c in df.columns]]
 
     if "trade_date" in df.columns:
-        df["trade_date"] = (
-            pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        )
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 # ===================== GC Opening Range =====================
 if choice == "GC Opening Range":
@@ -177,34 +145,16 @@ if choice == "GC Opening Range":
         st.stop()
 
     desired_order = [
-        "trade_date",
-        "day_of_week",
-        "open_location",
-        "symbol",
-        "or_window",
-        "orh",
-        "orl",
-        "or_range",
-        "first_break",
-        "broke_up",
-        "broke_down",
-        "broke_both",
-        "hit_20_up",
-        "hit_20_down",
-        "hit_50_up",
-        "hit_50_down",
-        "hit_100_up",
-        "hit_100_down",
-        "max_ext_up",
-        "max_ext_down",
-        "time_to_first_break_seconds",
+        "trade_date","day_of_week","open_location","symbol","or_window",
+        "orh","orl","or_range","first_break",
+        "broke_up","broke_down","broke_both",
+        "hit_20_up","hit_20_down","hit_50_up","hit_50_down","hit_100_up","hit_100_down",
+        "max_ext_up","max_ext_down","time_to_first_break_seconds",
     ]
     df = df[[c for c in desired_order if c in df.columns]]
 
     if "trade_date" in df.columns:
-        df["trade_date"] = (
-            pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        )
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
 # ===================== SPX Daily / Euro IB day support =====================
 if choice == "SPX Daily":
@@ -226,9 +176,7 @@ if st.sidebar.button("Clear Filters"):
 
 for n in range(num_filters):
     col = st.sidebar.selectbox(f"Column #{n+1}", df.columns, key=f"fcol{n}")
-    op = st.sidebar.selectbox(
-        f"Op #{n+1}", ["equals", "contains", "greater than", "less than"], key=f"fop{n}"
-    )
+    op = st.sidebar.selectbox(f"Op #{n+1}", ["equals", "contains", "greater than", "less than"], key=f"fop{n}")
     val = st.sidebar.text_input(f"Value #{n+1}", key=f"fval{n}")
     if col and op and val:
         filters.append((col, op, val))
@@ -237,9 +185,7 @@ for col, op, val in filters:
     if op == "equals":
         df = df[df[col].astype(str) == val]
     elif op == "contains":
-        df = df[
-            df[col].astype(str).str.contains(val, case=False, na=False)
-        ]
+        df = df[df[col].astype(str).str.contains(val, case=False, na=False)]
     elif op == "greater than":
         df = df[pd.to_numeric(df[col], errors="coerce") > float(val)]
     elif op == "less than":
@@ -247,43 +193,27 @@ for col, op, val in filters:
 
 # ---- Pivot stats (dynamic) ----
 if choice in [
-    # Daily/Weekly (ES & GC)
-    "Daily Pivots",
-    "Weekly Pivots",
-    "ES Daily Pivots",
-    "GC Daily Pivots",
-    "ES Weekly Pivots",
-    "GC Weekly Pivots",
-    # Session pivots (ES)
-    "ES RTH Pivots",
-    "ES ON Pivots",
+    "Daily Pivots","Weekly Pivots",
+    "ES Daily Pivots","GC Daily Pivots",
+    "ES Weekly Pivots","GC Weekly Pivots",
+    "ES RTH Pivots","ES ON Pivots",
 ]:
     render_pivot_stats(choice, df)
 
 # ===================== Euro IB dynamic =====================
 if choice == "Euro IB":
     desired_euro_cols = [
-        "trade_date",
-        "day",
-        "eur_ibh",
-        "eur_ibl",
-        "eibh_break",
-        "eibl_break",
-        "eibh12_hit",
-        "eibl12_hit",
-        "eibh15_hit",
-        "eibl15_hit",
-        "eibh20_hit",
-        "eibl20_hit",
-        "eur_ibh_rth_hit",
-        "eur_ibl_rth_hit",
+        "trade_date","day","eur_ibh","eur_ibl",
+        "eibh_break","eibl_break",
+        "eibh12_hit","eibl12_hit",
+        "eibh15_hit","eibl15_hit",
+        "eibh20_hit","eibl20_hit",
+        "eur_ibh_rth_hit","eur_ibl_rth_hit",
     ]
     df = df[[c for c in desired_euro_cols if c in df.columns]]
 
     if "trade_date" in df.columns:
-        df["trade_date"] = (
-            pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
-        )
+        df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
     render_euro_ib_metrics(df)
 
@@ -291,142 +221,62 @@ if choice == "Euro IB":
 if choice == "SPX Daily":
     render_spx_daily_metrics(df)
 
-# ===================== GC Levels dynamic (filters + probabilities + Day support) =====================
+# ===================== GC Levels dynamic =====================
 if choice == "GC Levels":
     df = render_gc_levels(df)
 
 # --- Time formatting for intraday sets ---
 if "time" in df.columns:
     if choice in ["Daily ES", "Weekly ES"]:
-        df["time"] = (
-            pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%d")
-        )
+        df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%d")
     else:
-        df["time"] = (
-            pd.to_datetime(df["time"], errors="coerce").dt.strftime(
-                "%Y-%m-%dT%H:%M"
-            )
-        )
+        df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime("%Y-%m-%dT%H:%M")
 
 # ---- Restrict columns for fixed datasets ----
 if choice in ["Daily Pivots", "ES Daily Pivots", "GC Daily Pivots"]:
     keep_cols_fixed = [
-        "date",
-        "day",
-        "hit_pivot",
-        "hit_r025",
-        "hit_s025",
-        "hit_r05",
-        "hit_s05",
-        "hit_r1",
-        "hit_s1",
-        "hit_r15",
-        "hit_s15",
-        "hit_r2",
-        "hit_s2",
-        "hit_r3",
-        "hit_s3",
+        "date","day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3",
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 elif choice in ["Weekly Pivots", "ES Weekly Pivots", "GC Weekly Pivots"]:
     keep_cols_fixed = [
         "date",
-        "hit_pivot",
-        "hit_r025",
-        "hit_s025",
-        "hit_r05",
-        "hit_s05",
-        "hit_r1",
-        "hit_s1",
-        "hit_r15",
-        "hit_s15",
-        "hit_r2",
-        "hit_s2",
-        "hit_r3",
-        "hit_s3",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3",
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 elif choice in ["ES 2h Pivots", "ES 4h Pivots", "ES 30m Pivots"]:
     keep_cols_fixed = [
-        "time",
-        "globex_date",
-        "day",
-        "hit_pivot",
-        "hit_r025",
-        "hit_s025",
-        "hit_r05",
-        "hit_s05",
-        "hit_r1",
-        "hit_s1",
-        "hit_r15",
-        "hit_s15",
-        "hit_r2",
-        "hit_s2",
-        "hit_r3",
-        "hit_s3",
+        "time","globex_date","day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3",
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
 elif choice in ["Daily ES", "Weekly ES", "30m ES", "2h ES", "4h ES"]:
-    keep_fixed = [
-        "time",
-        "open",
-        "high",
-        "low",
-        "close",
-        "200MA",
-        "50MA",
-        "20MA",
-        "10MA",
-        "5MA",
-        "Volume",
-        "ATR",
-    ]
+    keep_fixed = ["time","open","high","low","close","200MA","50MA","20MA","10MA","5MA","Volume","ATR"]
     df = df[[c for c in keep_fixed if c in df.columns]]
 
 elif choice == "ES Range Extensions":
     keep_fixed = [
-        "date",
-        "day",
-        "range",
-        "14_Day_Avg_Range",
-        "range_gt_avg",
-        "range_gt_80_avg",
-        "op_lo",
-        "op_lo_14_avg",
-        "op_lo_gt_avg",
-        "range_gt_80_op_lo",
-        "hi_op",
-        "hi_op_14_avg",
-        "hi_op_gt_avg",
-        "range_gt_80_hi_op",
-        "hit_both_80",
-        "hit_both_14_avg",
-        "range_gt_120_avg",
-        "range_gt_120_op_lo",
-        "range_gt_120_hi_op",
+        "date","day",
+        "range","14_Day_Avg_Range","range_gt_avg","range_gt_80_avg",
+        "op_lo","op_lo_14_avg","op_lo_gt_avg","range_gt_80_op_lo",
+        "hi_op","hi_op_14_avg","hi_op_gt_avg","range_gt_80_hi_op",
+        "hit_both_80","hit_both_14_avg",
+        "range_gt_120_avg","range_gt_120_op_lo","range_gt_120_hi_op",
     ]
     df = df[[c for c in keep_fixed if c in df.columns]]
 
 elif choice in ["ES RTH Pivots", "ES ON Pivots"]:
     keep_cols_fixed = [
-        "trade_date",
-        "day",
-        "hit_pivot",
-        "hit_r025",
-        "hit_s025",
-        "hit_r05",
-        "hit_s05",
-        "hit_r1",
-        "hit_s1",
-        "hit_r15",
-        "hit_s15",
-        "hit_r2",
-        "hit_s2",
-        "hit_r3",
-        "hit_s3",
+        "trade_date","day",
+        "hit_pivot","hit_r025","hit_s025","hit_r05","hit_s05",
+        "hit_r1","hit_s1","hit_r15","hit_s15","hit_r2","hit_s2","hit_r3","hit_s3",
     ]
     df = df[[c for c in keep_cols_fixed if c in df.columns]]
 
@@ -438,13 +288,9 @@ if keep_cols:
 for col in df.columns:
     if df[col].dtype in ["float64", "float32", "int64", "int32"]:
         if "volume" in col.lower():
-            df[col] = df[col].apply(
-                lambda x: f"{int(x):,}" if pd.notnull(x) else x
-            )
+            df[col] = df[col].apply(lambda x: f"{int(x):,}" if pd.notnull(x) else x)
         else:
-            df[col] = df[col].apply(
-                lambda x: f"{x:,.2f}" if pd.notnull(x) else x
-            )
+            df[col] = df[col].apply(lambda x: f"{x:,.2f}" if pd.notnull(x) else x)
 
 # -------------------- Styling helpers --------------------
 def color_hits(val):
@@ -473,19 +319,15 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
     ]
 
     THICK_BORDER_AFTER = {
-        # Daily
         "Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "ES Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "GC Daily Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        # Weekly
         "Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "ES Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "GC Weekly Pivots": ["date","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        # Intraday ES
         "ES 2h Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "ES 4h Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "ES 30m Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
-        # Session ES
         "ES RTH Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
         "ES ON Pivots": ["day","hit_pivot","hit_s025","hit_s05","hit_s1","hit_s15","hit_s2","hit_s3"],
     }
@@ -506,7 +348,6 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
 
     return styler
 
-
 # -------------------- Header Labels --------------------
 HEADER_LABELS = {
     "Daily Pivots": {
@@ -519,43 +360,6 @@ HEADER_LABELS = {
         "hit_r3": "R3", "hit_s3": "S3",
     },
     "Weekly Pivots": {
-        "date": "Date",
-        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
-        "hit_r05": "R0.5", "hit_s05": "S0.5",
-        "hit_r1": "R1", "hit_s1": "S1",
-        "hit_r15": "R1.5", "hit_s15": "S1.5",
-        "hit_r2": "R2", "hit_s2": "S2",
-        "hit_r3": "R3", "hit_s3": "S3",
-    },
-    # ES / GC labeled views
-    "ES Daily Pivots": {
-        "date": "Date", "day": "Day",
-        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
-        "hit_r05": "R0.5", "hit_s05": "S0.5",
-        "hit_r1": "R1", "hit_s1": "S1",
-        "hit_r15": "R1.5", "hit_s15": "S1.5",
-        "hit_r2": "R2", "hit_s2": "S2",
-        "hit_r3": "R3", "hit_s3": "S3",
-    },
-    "GC Daily Pivots": {
-        "date": "Date", "day": "Day",
-        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
-        "hit_r05": "R0.5", "hit_s05": "S0.5",
-        "hit_r1": "R1", "hit_s1": "S1",
-        "hit_r15": "R1.5", "hit_s15": "S1.5",
-        "hit_r2": "R2", "hit_s2": "S2",
-        "hit_r3": "R3", "hit_s3": "S3",
-    },
-    "ES Weekly Pivots": {
-        "date": "Date",
-        "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
-        "hit_r05": "R0.5", "hit_s05": "S0.5",
-        "hit_r1": "R1", "hit_s1": "S1",
-        "hit_r15": "R1.5", "hit_s15": "S1.5",
-        "hit_r2": "R2", "hit_s2": "S2",
-        "hit_r3": "R3", "hit_s3": "S3",
-    },
-    "GC Weekly Pivots": {
         "date": "Date",
         "hit_pivot": "Pivot", "hit_r025": "R025", "hit_s025": "S025",
         "hit_r05": "R0.5", "hit_s05": "S0.5",
