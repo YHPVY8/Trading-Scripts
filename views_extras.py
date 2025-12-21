@@ -3,6 +3,7 @@ import pandas as pd
 from supabase import create_client
 from datetime import date, timedelta
 import re
+from typing import Optional, List, Dict, Tuple
 
 # -------------------- Column label aliases for fetch_current_levels --------------------
 LEVEL_ALIASES = [
@@ -36,13 +37,13 @@ PIVOT_TABLES = {
 def _normalize_table_name(name: str) -> str:
     return (name or "").strip().split(".")[-1].lower()
 
-def _first_present(rec: dict, keys: list[str]):
+def _first_present(rec: dict, keys: List[str]):
     for k in keys:
         if k in rec and rec[k] not in (None, ""):
             return rec[k]
     return None
 
-def _first_existing_datecol(rec: dict, preferred: str):
+def _first_existing_datecol(rec: dict, preferred: str) -> str:
     candidates = [preferred, "trade_date", "date", "time"]
     for c in candidates:
         if c in rec:
@@ -134,11 +135,11 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
     dff = df.copy()
 
     def _to_bool(col: str) -> pd.Series:
-        if col not in dff: return pd.Series(dtype="boolean")
+        if col not in dff:
+            return pd.Series(dtype="boolean")
         s = dff[col]
         if s.dtype == bool:
             return s.astype("boolean")
-        # numeric -> >0 is True
         if pd.api.types.is_numeric_dtype(s):
             return (pd.to_numeric(s, errors="coerce").fillna(0) > 0).astype("boolean")
         return (
@@ -149,7 +150,8 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
         )
 
     def _num(col: str) -> pd.Series:
-        if col not in dff: return pd.Series(dtype="float64")
+        if col not in dff:
+            return pd.Series(dtype="float64")
         return pd.to_numeric(dff[col], errors="coerce")
 
     def _pct(series: pd.Series) -> str:
@@ -342,12 +344,6 @@ def render_pivot_stats(choice: str, df: pd.DataFrame) -> None:
 _WEEKDAY_ABBR = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
 
 def _normalize_key(s: str) -> str:
-    """
-    Case/space/punct-insensitive key:
-    - lowercases
-    - replace unicode × with x
-    - remove spaces, hyphens, dots, and non-alphanumerics (keep a–z, 0–9, x)
-    """
     s = s.lower().replace("×", "x")
     s = re.sub(r"[^a-z0-9x]+", "", s)
     return s
@@ -355,8 +351,9 @@ def _normalize_key(s: str) -> str:
 def _build_ci_map(dff: pd.DataFrame) -> dict:
     return {_normalize_key(c): c for c in dff.columns}
 
-def _find_norm(dff: pd.DataFrame, *candidates: str) -> str | None:
-    if dff is None or dff.empty: return None
+def _find_norm(dff: pd.DataFrame, *candidates: str) -> Optional[str]:
+    if dff is None or dff.empty:
+        return None
     m = _build_ci_map(dff)
     for cand in candidates:
         k = _normalize_key(cand)
@@ -378,7 +375,7 @@ def _ensure_day_col(dff: pd.DataFrame) -> pd.DataFrame:
     dff["Day"] = pd.Categorical(dff["Day"], categories=_WEEKDAY_ABBR, ordered=True)
     return dff
 
-def _to_bool_series(dff: pd.DataFrame, col: str | None) -> pd.Series:
+def _to_bool_series(dff: pd.DataFrame, col: Optional[str]) -> pd.Series:
     if not col or col not in dff:
         return pd.Series([], dtype="boolean")
     s = dff[col]
@@ -398,14 +395,6 @@ def _pct_mean_bool(s: pd.Series) -> str:
     return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
 def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Dynamic probability tiles for the gc_levels base table (Gold).
-    Includes:
-      - Premarket Breaks
-      - Adjusted RTH Breaks
-      - RTH Extension Hits
-      - ON Extreme Stats (Break ONH/ONL + Either/Both)
-    """
     if df is None or df.empty:
         st.info("No data in gc_levels for the current filters.")
         return df
@@ -415,7 +404,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
 
     get = lambda *names: _find_norm(dff, *names)
 
-    # --- Premarket/AdjRTH/Extensions (existing) ---
     c_ibh_pm  = get("aIBH Broke Premarket", "aibh broke premarket", "aibh_broke_premarket")
     c_ibl_pm  = get("aIBL Broke Premarket", "aibl broke premarket", "aibl_broke_premarket")
     c_mid_pm  = get("aIB Mid Hit Premarket", "aib mid hit premarket", "aib_mid_hit_premarket")
@@ -435,11 +423,9 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     c_ibl_15 = get("aIBL1.5x - Hit RTH", "aibl1.5x - hit rth", "aibl15x hit rth", "aibl1_5x hit rth", "aibl15 hit rth", "aibl1_5 hit rth", "aibl15x_hit_rth")
     c_ibl_2x = get("aIBL2x - Hit RTH",   "aibl2x - hit rth",   "aibl2x hit rth", "aibl2x_hit_rth")
 
-    # --- NEW: ON extremes (your DB fields) ---
     c_onh = get("broke_onh", "Broke ONH", "Hit ONH")
     c_onl = get("broke_onl", "Broke ONL", "Hit ONL")
 
-    # --- Premarket breaks ---
     s_ibh_pm = _to_bool_series(dff, c_ibh_pm)
     s_ibl_pm = _to_bool_series(dff, c_ibl_pm)
     s_mid_pm = _to_bool_series(dff, c_mid_pm)
@@ -456,7 +442,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
         "aIB Mid Hit Premarket": _pct_mean_bool(s_mid_pm),
     }
 
-    # --- Adjusted RTH breaks ---
     s_ibh_adj = _to_bool_series(dff, c_ibh_adj)
     s_ibl_adj = _to_bool_series(dff, c_ibl_adj)
     s_mid_rth = _to_bool_series(dff, c_mid_rth)
@@ -472,7 +457,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
         "aIB Mid Hit RTH": _pct_mean_bool(s_mid_rth),
     }
 
-    # --- RTH Extension Hits ---
     s_ibh_12 = _to_bool_series(dff, c_ibh_12)
     s_ibh_15 = _to_bool_series(dff, c_ibh_15)
     s_ibh_2x = _to_bool_series(dff, c_ibh_2x)
@@ -489,7 +473,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
         "aIBL 2×   — Hit RTH": _pct_mean_bool(s_ibl_2x),
     }
 
-    # --- NEW: ON extreme stats ---
     s_onh = _to_bool_series(dff, c_onh)
     s_onl = _to_bool_series(dff, c_onl)
 
@@ -526,10 +509,6 @@ def render_gc_levels(df: pd.DataFrame) -> pd.DataFrame:
     return dff
 
 # -------------------- SPX Opening Range (filter + header tiles) --------------------
-def _sb():
-    """Local Supabase client using Streamlit secrets (rarely used directly)."""
-    return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-
 def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty or "or_window" not in df.columns:
         return df
@@ -562,7 +541,8 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         return None
 
     def _rate_from_bool(dfX, col):
-        if not col or col not in dfX: return "–"
+        if not col or col not in dfX:
+            return "–"
         s = dfX[col]
         if pd.api.types.is_numeric_dtype(s):
             s = (pd.to_numeric(s, errors="coerce").fillna(0) > 0)
@@ -575,12 +555,14 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     def _rate_from_numeric(dfX, col, thr):
-        if not col or not (col in dfX): return "–"
+        if not col or not (col in dfX):
+            return "–"
         s = pd.to_numeric(dfX[col], errors="coerce").dropna()
         return "–" if s.empty else f"{100.0 * (s >= thr).mean():.1f}%"
 
     def _pct_bool_mean(colname):
-        if colname not in dff: return "–"
+        if not colname or colname not in dff:
+            return "–"
         s = pd.to_numeric(dff[colname], errors="coerce")
         return f"{100.0 * s.mean():.1f}%" if len(s.dropna()) else "–"
 
@@ -596,16 +578,16 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         "Broke Both": _pct_bool_mean(broke_both) if broke_both else "–",
     }
 
-    up20  = _find_col_ci(["hit_20_up",  "hitup20",  "hit_up20",  "up20",  "or_up_20",  "hit_or_up_20"])
-    up50  = _find_col_ci(["hit_50_up",  "hitup50",  "hit_up50",  "up50",  "or_up_50",  "hit_or_up_50"])
-    up100 = _find_col_ci(["hit_100_up", "hitup100", "hit_up100", "up100", "or_up_100", "hit_or_up_100"])
+    up20  = _find_col_ci(["hit_20_up"])
+    up50  = _find_col_ci(["hit_50_up"])
+    up100 = _find_col_ci(["hit_100_up"])
 
-    dn20  = _find_col_ci(["hit_20_down",  "hitdn20",  "hit_down20",  "down20",  "or_dn_20",  "hit_or_dn_20"])
-    dn50  = _find_col_ci(["hit_50_down",  "hitdn50",  "hit_down50",  "down50",  "or_dn_50",  "hit_or_dn_50"])
-    dn100 = _find_col_ci(["hit_100_down", "hitdn100", "hit_down100", "down100", "or_dn_100"])
+    dn20  = _find_col_ci(["hit_20_down"])
+    dn50  = _find_col_ci(["hit_50_down"])
+    dn100 = _find_col_ci(["hit_100_down"])
 
-    max_up = _find_col_ci(["max_ext_up", "max_up_ext", "max_up_frac", "max_up_or_mult"])
-    max_dn = _find_col_ci(["max_ext_down", "max_dn_ext", "max_dn_frac", "max_dn_or_mult"])
+    max_up = _find_col_ci(["max_ext_up"])
+    max_dn = _find_col_ci(["max_ext_down"])
 
     right_data = {
         "Up ≥20%":   (_rate_from_bool(dff, up20)  if up20  else _rate_from_numeric(dff, max_up, 0.20)),
@@ -624,11 +606,6 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 # -------------------- GC Opening Range (filter + header tiles) --------------------
 def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Mirrors spx_opening_range_filter_and_metrics, but for Gold (GC):
-      - OR Window choices: 5m, 30m
-      - Same break stats + extension hit tiles
-    """
     if df is None or df.empty or "or_window" not in df.columns:
         return df
 
@@ -639,6 +616,7 @@ def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         dff["trade_date"] = pd.to_datetime(dff["trade_date"], errors="coerce")
         dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
+    # Mirror the same header tiles behavior as SPX
     def _render_block(col, title, items_dict):
         with col:
             st.markdown(f"### {title}")
@@ -660,7 +638,8 @@ def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         return None
 
     def _rate_from_bool(dfX, col):
-        if not col or col not in dfX: return "–"
+        if not col or col not in dfX:
+            return "–"
         s = dfX[col]
         if pd.api.types.is_numeric_dtype(s):
             s = (pd.to_numeric(s, errors="coerce").fillna(0) > 0)
@@ -673,12 +652,14 @@ def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     def _rate_from_numeric(dfX, col, thr):
-        if not col or not (col in dfX): return "–"
+        if not col or not (col in dfX):
+            return "–"
         s = pd.to_numeric(dfX[col], errors="coerce").dropna()
         return "–" if s.empty else f"{100.0 * (s >= thr).mean():.1f}%"
 
     def _pct_bool_mean(colname):
-        if colname not in dff: return "–"
+        if not colname or colname not in dff:
+            return "–"
         s = pd.to_numeric(dff[colname], errors="coerce")
         return f"{100.0 * s.mean():.1f}%" if len(s.dropna()) else "–"
 
@@ -694,16 +675,16 @@ def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         "Broke Both": _pct_bool_mean(broke_both) if broke_both else "–",
     }
 
-    up20  = _find_col_ci(["hit_20_up",  "hitup20",  "hit_up20",  "up20",  "or_up_20",  "hit_or_up_20"])
-    up50  = _find_col_ci(["hit_50_up",  "hitup50",  "hit_up50",  "up50",  "or_up_50",  "hit_or_up_50"])
-    up100 = _find_col_ci(["hit_100_up", "hitup100", "hit_up100", "up100", "or_up_100", "hit_or_up_100"])
+    up20  = _find_col_ci(["hit_20_up"])
+    up50  = _find_col_ci(["hit_50_up"])
+    up100 = _find_col_ci(["hit_100_up"])
 
-    dn20  = _find_col_ci(["hit_20_down",  "hitdn20",  "hit_down20",  "down20",  "or_dn_20",  "hit_or_dn_20"])
-    dn50  = _find_col_ci(["hit_50_down",  "hitdn50",  "hit_down50",  "down50",  "or_dn_50",  "hit_or_dn_50"])
-    dn100 = _find_col_ci(["hit_100_down", "hitdn100", "hit_down100", "down100", "or_dn_100"])
+    dn20  = _find_col_ci(["hit_20_down"])
+    dn50  = _find_col_ci(["hit_50_down"])
+    dn100 = _find_col_ci(["hit_100_down"])
 
-    max_up = _find_col_ci(["max_ext_up", "max_up_ext", "max_up_frac", "max_up_or_mult"])
-    max_dn = _find_col_ci(["max_ext_down", "max_dn_ext", "max_dn_frac", "max_dn_or_mult"])
+    max_up = _find_col_ci(["max_ext_up"])
+    max_dn = _find_col_ci(["max_ext_down"])
 
     right_data = {
         "Up ≥20%":   (_rate_from_bool(dff, up20)  if up20  else _rate_from_numeric(dff, max_up, 0.20)),
