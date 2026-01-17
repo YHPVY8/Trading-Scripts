@@ -44,6 +44,7 @@ BASE_TABLES = OrderedDict({
             "rth_hi", "rth_lo",
             "ibh_broke_am", "ibl_broke_am", "both_ib_broke_am",
             "pm_ext_up", "pm_ext_down",
+            "ibh_pm_hit", "ibl_pm_hit", "ib_mid_pm_hit",
             "ib_ext",
         ],
         "labels": {
@@ -61,6 +62,9 @@ BASE_TABLES = OrderedDict({
             "both_ib_broke_am": "Both IB Broke AM",
             "pm_ext_up": "PM Ext Up",
             "pm_ext_down": "PM Ext Down",
+            "ibh_pm_hit": "IBH PM Hit",
+            "ibl_pm_hit": "IBL PM Hit",
+            "ib_mid_pm_hit": "IB Mid PM Hit",
             "ib_ext": "IB Ext",
         },
     },
