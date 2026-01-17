@@ -161,24 +161,34 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
     cols_lower = {c.lower(): c for c in dff.columns}
     get = lambda name: cols_lower.get(name.lower())
 
-    ibh_broke = _to_bool(get("ibh_broke_am") or "ibh_broke_am")
-    ibl_broke = _to_bool(get("ibl_broke_am") or "ibl_broke_am")
+    # Existing
+    ibh_broke  = _to_bool(get("ibh_broke_am") or "ibh_broke_am")
+    ibl_broke  = _to_bool(get("ibl_broke_am") or "ibl_broke_am")
     both_broke = _to_bool(get("both_ib_broke_am") or "both_ib_broke_am")
-    pm_up = _to_bool(get("pm_ext_up") or "pm_ext_up")
-    pm_dn = _to_bool(get("pm_ext_down") or "pm_ext_down")
+    pm_up      = _to_bool(get("pm_ext_up") or "pm_ext_up")
+    pm_dn      = _to_bool(get("pm_ext_down") or "pm_ext_down")
 
-    ibh = _num(get("ibh") or "ibh")
-    ibl = _num(get("ibl") or "ibl")
-    rth_hi = _num(get("rth_hi") or "rth_hi")
-    rth_lo = _num(get("rth_lo") or "rth_lo")
-    ib_ext = _num(get("ib_ext") or "ib_ext")
+    ibh     = _num(get("ibh") or "ibh")
+    ibl     = _num(get("ibl") or "ibl")
+    rth_hi  = _num(get("rth_hi") or "rth_hi")
+    rth_lo  = _num(get("rth_lo") or "rth_lo")
+    ib_ext  = _num(get("ib_ext") or "ib_ext")
 
-    ib_range = (ibh - ibl)
+    ib_range  = (ibh - ibl)
     rth_range = (rth_hi - rth_lo)
 
     days = len(dff)
 
-    c1, c2, c3 = st.columns(3)
+    # New: Afternoon IB Stats (PM hits)
+    ibh_pm_hit    = _to_bool(get("ibh_pm_hit") or "ibh_pm_hit")
+    ibl_pm_hit    = _to_bool(get("ibl_pm_hit") or "ibl_pm_hit")
+    ib_mid_pm_hit = _to_bool(get("ib_mid_pm_hit") or "ib_mid_pm_hit")
+
+    either_ib_pm_hit = (ibh_pm_hit | ibl_pm_hit) if (len(ibh_pm_hit) and len(ibl_pm_hit)) else pd.Series(dtype="boolean")
+    both_ib_pm_hit   = (ibh_pm_hit & ibl_pm_hit) if (len(ibh_pm_hit) and len(ibl_pm_hit)) else pd.Series(dtype="boolean")
+
+    c1, c2, c3, c4 = st.columns(4)
+
     with c1:
         st.markdown("### Break Statistics")
         st.markdown(f"**Days:** {days:,}")
@@ -199,6 +209,14 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
         st.markdown(f"**Avg IB Ext:** {avg_ib_ext}")
         st.markdown(f"**Avg IB Range:** {avg_ib_rng}")
         st.markdown(f"**Avg RTH Range:** {avg_rth_rng}")
+
+    with c4:
+        st.markdown("### Afternoon IB Stats")
+        st.markdown(f"**IBH Hit in PM:** {_pct(ibh_pm_hit)}")
+        st.markdown(f"**IBL Hit in PM:** {_pct(ibl_pm_hit)}")
+        st.markdown(f"**IB Mid Hit in PM:** {_pct(ib_mid_pm_hit)}")
+        st.markdown(f"**Either IB Hit in PM:** {_pct(either_ib_pm_hit)}")
+        st.markdown(f"**Both IB Hit in PM:** {_pct(both_ib_pm_hit)}")
 
 # -------------------- Euro IB header tiles --------------------
 def render_euro_ib_metrics(df: pd.DataFrame) -> None:
@@ -616,7 +634,6 @@ def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         dff["trade_date"] = pd.to_datetime(dff["trade_date"], errors="coerce")
         dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
-    # Mirror the same header tiles behavior as SPX
     def _render_block(col, title, items_dict):
         with col:
             st.markdown(f"### {title}")
