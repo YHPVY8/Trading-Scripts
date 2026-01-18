@@ -134,10 +134,9 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
 
     dff = df.copy()
 
-    # --- Fix #1: ensure trade_date displays as YYYY-MM-DD (no 00:00:00) in the dataframe/table ---
+    # ensure trade_date displays as YYYY-MM-DD
     if "trade_date" in dff.columns:
         td = pd.to_datetime(dff["trade_date"], errors="coerce")
-        # keep as date only (string) for clean display
         dff["trade_date"] = td.dt.strftime("%Y-%m-%d")
 
     def _to_bool(col: str) -> pd.Series:
@@ -164,6 +163,12 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
         s = series.dropna()
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
+    def _avg_gt1(series: pd.Series) -> str:
+        """Average only values > 1.0 (ignore <=1 and NaNs)."""
+        s = pd.to_numeric(series, errors="coerce")
+        s = s[(s > 1.0) & s.notna()]
+        return "–" if s.empty else f"{s.mean():.2f}"
+
     cols_lower = {c.lower(): c for c in dff.columns}
     get = lambda name: cols_lower.get(name.lower())
 
@@ -185,6 +190,10 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
     rth_hi  = _num(get("rth_hi") or "rth_hi")
     rth_lo  = _num(get("rth_lo") or "rth_lo")
     ib_ext  = _num(get("ib_ext") or "ib_ext")
+
+    ib_ext_up_am   = _num(get("ib_ext_up_am") or "ib_ext_up_am")
+    ib_ext_down_am = _num(get("ib_ext_down_am") or "ib_ext_down_am")
+    pm_ext         = _num(get("pm_ext") or "pm_ext")
 
     ib_range  = (ibh - ibl)
     rth_range = (rth_hi - rth_lo)
@@ -219,7 +228,14 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
         avg_ib_ext  = "–" if ib_ext.dropna().empty else f"{ib_ext.mean():.2f}"
         avg_ib_rng  = "–" if ib_range.dropna().empty else f"{ib_range.mean():.2f}"
         avg_rth_rng = "–" if rth_range.dropna().empty else f"{rth_range.mean():.2f}"
+        avg_ib_ext_up_am   = _avg_gt1(ib_ext_up_am)
+        avg_ib_ext_down_am = _avg_gt1(ib_ext_down_am)
+        avg_pm_ext = "–" if pm_ext.dropna().empty else f"{pm_ext.dropna().mean():.2f}"
+
         st.markdown(f"**Avg IB Ext:** {avg_ib_ext}")
+        st.markdown(f"**Avg IB Ext Up AM (>1):** {avg_ib_ext_up_am}")
+        st.markdown(f"**Avg IB Ext Down AM (>1):** {avg_ib_ext_down_am}")
+        st.markdown(f"**Avg PM Ext:** {avg_pm_ext}")
         st.markdown(f"**Avg IB Range:** {avg_ib_rng}")
         st.markdown(f"**Avg RTH Range:** {avg_rth_rng}")
 
@@ -549,11 +565,9 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
     if "trade_date" in dff.columns:
         dff["trade_date"] = pd.to_datetime(dff["trade_date"], errors="coerce")
-        dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True
+        dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
-        )
     # ... remainder unchanged ...
-
     return dff
 
 # -------------------- GC Opening Range (filter + header tiles) --------------------
@@ -569,7 +583,6 @@ def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
     # ... remainder unchanged ...
-
     return dff
 
 # Backwards-compatibility stub (kept no-op)
