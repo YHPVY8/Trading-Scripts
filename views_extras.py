@@ -134,7 +134,7 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
 
     dff = df.copy()
 
-    # ensure trade_date displays as YYYY-MM-DD
+    # Keep trade_date display clean inside the df used for metrics (no 00:00:00)
     if "trade_date" in dff.columns:
         td = pd.to_datetime(dff["trade_date"], errors="coerce")
         dff["trade_date"] = td.dt.strftime("%Y-%m-%d")
@@ -164,7 +164,6 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
         return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
     def _avg_gt1(series: pd.Series) -> str:
-        """Average only values > 1.0 (ignore <=1 and NaNs)."""
         s = pd.to_numeric(series, errors="coerce")
         s = s[(s > 1.0) & s.notna()]
         return "–" if s.empty else f"{s.mean():.2f}"
@@ -228,9 +227,11 @@ def render_spx_daily_metrics(df: pd.DataFrame) -> None:
         avg_ib_ext  = "–" if ib_ext.dropna().empty else f"{ib_ext.mean():.2f}"
         avg_ib_rng  = "–" if ib_range.dropna().empty else f"{ib_range.mean():.2f}"
         avg_rth_rng = "–" if rth_range.dropna().empty else f"{rth_range.mean():.2f}"
+
+        # ✅ New averages requested
         avg_ib_ext_up_am   = _avg_gt1(ib_ext_up_am)
         avg_ib_ext_down_am = _avg_gt1(ib_ext_down_am)
-        avg_pm_ext = "–" if pm_ext.dropna().empty else f"{pm_ext.dropna().mean():.2f}"
+        avg_pm_ext         = "–" if pm_ext.dropna().empty else f"{pm_ext.dropna().mean():.2f}"
 
         st.markdown(f"**Avg IB Ext:** {avg_ib_ext}")
         st.markdown(f"**Avg IB Ext Up AM (>1):** {avg_ib_ext_up_am}")
@@ -567,7 +568,88 @@ def spx_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         dff["trade_date"] = pd.to_datetime(dff["trade_date"], errors="coerce")
         dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
-    # ... remainder unchanged ...
+    def _render_block(col, title, items_dict):
+        with col:
+            st.markdown(f"### {title}")
+            for k, v in items_dict.items():
+                st.markdown(
+                    f"""
+                    <div style='padding:4px 0; margin-bottom:2px; border-bottom:1px solid #ddd;'>
+                        <strong>{k}:</strong> {v}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    cols_lower = {c.lower(): c for c in dff.columns}
+    def _find_col_ci(names):
+        for n in names:
+            if n.lower() in cols_lower:
+                return cols_lower[n.lower()]
+        return None
+
+    def _rate_from_bool(dfX, col):
+        if not col or col not in dfX:
+            return "–"
+        s = dfX[col]
+        if pd.api.types.is_numeric_dtype(s):
+            s = (pd.to_numeric(s, errors="coerce").fillna(0) > 0)
+        else:
+            s = s.astype(str).str.strip().str.lower().map(
+                {"true": True, "1": True, "1.0": True, "yes": True, "y": True,
+                 "false": False, "0": False, "0.0": False, "no": False, "n": False}
+            )
+        s = s.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
+
+    def _rate_from_numeric(dfX, col, thr):
+        if not col or not (col in dfX):
+            return "–"
+        s = pd.to_numeric(dfX[col], errors="coerce").dropna()
+        return "–" if s.empty else f"{100.0 * (s >= thr).mean():.1f}%"
+
+    def _pct_bool_mean(colname):
+        if not colname or colname not in dff:
+            return "–"
+        s = pd.to_numeric(dff[colname], errors="coerce")
+        return f"{100.0 * s.mean():.1f}%" if len(s.dropna()) else "–"
+
+    days = len(dff)
+    broke_up   = _find_col_ci(["broke_up"])
+    broke_down = _find_col_ci(["broke_down"])
+    broke_both = _find_col_ci(["broke_both"])
+
+    left_data = {
+        "Days": f"{days:,}",
+        "Broke Up":   _pct_bool_mean(broke_up)   if broke_up   else "–",
+        "Broke Down": _pct_bool_mean(broke_down) if broke_down else "–",
+        "Broke Both": _pct_bool_mean(broke_both) if broke_both else "–",
+    }
+
+    up20  = _find_col_ci(["hit_20_up"])
+    up50  = _find_col_ci(["hit_50_up"])
+    up100 = _find_col_ci(["hit_100_up"])
+
+    dn20  = _find_col_ci(["hit_20_down"])
+    dn50  = _find_col_ci(["hit_50_down"])
+    dn100 = _find_col_ci(["hit_100_down"])
+
+    max_up = _find_col_ci(["max_ext_up"])
+    max_dn = _find_col_ci(["max_ext_down"])
+
+    right_data = {
+        "Up ≥20%":   (_rate_from_bool(dff, up20)  if up20  else _rate_from_numeric(dff, max_up, 0.20)),
+        "Up ≥50%":   (_rate_from_bool(dff, up50)  if up50  else _rate_from_numeric(dff, max_up, 0.50)),
+        "Up ≥100%":  (_rate_from_bool(dff, up100) if up100 else _rate_from_numeric(dff, max_up, 1.00)),
+        "Down ≥20%": (_rate_from_bool(dff, dn20)  if dn20  else _rate_from_numeric(dff, max_dn, 0.20)),
+        "Down ≥50%": (_rate_from_bool(dff, dn50)  if dn50  else _rate_from_numeric(dff, max_dn, 0.50)),
+        "Down ≥100%":(_rate_from_bool(dff, dn100) if dn100 else _rate_from_numeric(dff, max_dn, 1.00)),
+    }
+
+    col_left, col_right = st.columns(2)
+    _render_block(col_left,  "Break Statistics", left_data)
+    _render_block(col_right, "Extension Hits",   right_data)
+
     return dff
 
 # -------------------- GC Opening Range (filter + header tiles) --------------------
@@ -582,7 +664,88 @@ def gc_opening_range_filter_and_metrics(df: pd.DataFrame) -> pd.DataFrame:
         dff["trade_date"] = pd.to_datetime(dff["trade_date"], errors="coerce")
         dff = dff.sort_values("trade_date", ascending=True).reset_index(drop=True)
 
-    # ... remainder unchanged ...
+    def _render_block(col, title, items_dict):
+        with col:
+            st.markdown(f"### {title}")
+            for k, v in items_dict.items():
+                st.markdown(
+                    f"""
+                    <div style='padding:4px 0; margin-bottom:2px; border-bottom:1px solid #ddd;'>
+                        <strong>{k}:</strong> {v}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+    cols_lower = {c.lower(): c for c in dff.columns}
+    def _find_col_ci(names):
+        for n in names:
+            if n.lower() in cols_lower:
+                return cols_lower[n.lower()]
+        return None
+
+    def _rate_from_bool(dfX, col):
+        if not col or col not in dfX:
+            return "–"
+        s = dfX[col]
+        if pd.api.types.is_numeric_dtype(s):
+            s = (pd.to_numeric(s, errors="coerce").fillna(0) > 0)
+        else:
+            s = s.astype(str).str.strip().str.lower().map(
+                {"true": True, "1": True, "1.0": True, "yes": True, "y": True,
+                 "false": False, "0": False, "0.0": False, "no": False, "n": False}
+            )
+        s = s.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
+
+    def _rate_from_numeric(dfX, col, thr):
+        if not col or not (col in dfX):
+            return "–"
+        s = pd.to_numeric(dfX[col], errors="coerce").dropna()
+        return "–" if s.empty else f"{100.0 * (s >= thr).mean():.1f}%"
+
+    def _pct_bool_mean(colname):
+        if not colname or colname not in dff:
+            return "–"
+        s = pd.to_numeric(dff[colname], errors="coerce")
+        return f"{100.0 * s.mean():.1f}%" if len(s.dropna()) else "–"
+
+    days = len(dff)
+    broke_up   = _find_col_ci(["broke_up"])
+    broke_down = _find_col_ci(["broke_down"])
+    broke_both = _find_col_ci(["broke_both"])
+
+    left_data = {
+        "Days": f"{days:,}",
+        "Broke Up":   _pct_bool_mean(broke_up)   if broke_up   else "–",
+        "Broke Down": _pct_bool_mean(broke_down) if broke_down else "–",
+        "Broke Both": _pct_bool_mean(broke_both) if broke_both else "–",
+    }
+
+    up20  = _find_col_ci(["hit_20_up"])
+    up50  = _find_col_ci(["hit_50_up"])
+    up100 = _find_col_ci(["hit_100_up"])
+
+    dn20  = _find_col_ci(["hit_20_down"])
+    dn50  = _find_col_ci(["hit_50_down"])
+    dn100 = _find_col_ci(["hit_100_down"])
+
+    max_up = _find_col_ci(["max_ext_up"])
+    max_dn = _find_col_ci(["max_ext_down"])
+
+    right_data = {
+        "Up ≥20%":   (_rate_from_bool(dff, up20)  if up20  else _rate_from_numeric(dff, max_up, 0.20)),
+        "Up ≥50%":   (_rate_from_bool(dff, up50)  if up50  else _rate_from_numeric(dff, max_up, 0.50)),
+        "Up ≥100%":  (_rate_from_bool(dff, up100) if up100 else _rate_from_numeric(dff, max_up, 1.00)),
+        "Down ≥20%": (_rate_from_bool(dff, dn20)  if dn20  else _rate_from_numeric(dff, max_dn, 0.20)),
+        "Down ≥50%": (_rate_from_bool(dff, dn50)  if dn50  else _rate_from_numeric(dff, max_dn, 0.50)),
+        "Down ≥100%":(_rate_from_bool(dff, dn100) if dn100 else _rate_from_numeric(dff, max_dn, 1.00)),
+    }
+
+    col_left, col_right = st.columns(2)
+    _render_block(col_left,  "Break Statistics", left_data)
+    _render_block(col_right, "Extension Hits",   right_data)
+
     return dff
 
 # Backwards-compatibility stub (kept no-op)
