@@ -408,10 +408,17 @@ st.markdown(
         background-clip: padding-box;
         border-bottom: none !important;
     }
+
+    /* Prevent wrapping (fixes Date splitting into two lines) */
+    .scroll-table-container td,
+    .scroll-table-container th {
+        white-space: nowrap;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
 
