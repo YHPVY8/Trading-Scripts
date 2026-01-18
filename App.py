@@ -161,6 +161,8 @@ if choice == "SPX Daily":
     if "day" not in df.columns and "trade_date" in df.columns:
         df["trade_date"] = pd.to_datetime(df["trade_date"], errors="coerce")
         df["day"] = df["trade_date"].dt.strftime("%a")
+        df["trade_date"] = df["trade_date"].dt.strftime("%Y-%m-%d")  # <-- ADD THIS LINE
+
 
 elif choice == "Euro IB":
     if "day" not in df.columns and "trade_date" in df.columns:
