@@ -7,10 +7,6 @@ from typing import Optional
 # import the tables/view builder
 from views_config import build_tables
 
-import views_extras, os
-st.sidebar.write("DEBUG views_extras path:", os.path.abspath(views_extras.__file__))
-
-
 # helpers for extras/metrics
 from views_extras import (
     render_current_levels,
