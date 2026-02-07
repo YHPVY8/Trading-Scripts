@@ -5,6 +5,10 @@ from datetime import date, timedelta
 import re
 from typing import Optional, List, Dict, Tuple
 
+import os
+st.write("DEBUG views_extras loaded from:", os.path.abspath(__file__))
+
+
 # -------------------- Column label aliases for fetch_current_levels --------------------
 LEVEL_ALIASES = [
     ("Pivot", ["Pivot", "pivot"]),
