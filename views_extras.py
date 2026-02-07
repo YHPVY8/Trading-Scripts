@@ -17,7 +17,7 @@ LEVEL_ALIASES = [
     ("R2",    ["R2",  "r2"]),
     ("S2",    ["S2",  "s2"]),
     ("R3",    ["R3","r3"]),
-    ("S3",    ["S3","r3"]),
+    ("S3",    ["S3","s3"]),
 ]
 
 # Tables we consider “pivot level” sets (ES + GC)
