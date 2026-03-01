@@ -265,12 +265,16 @@ elif choice in ["Daily ES", "Weekly ES", "30m ES", "2h ES", "4h ES"]:
 
 elif choice == "ES Range Extensions":
     keep_fixed = [
-        "date","day",
-        "range","14_Day_Avg_Range","range_gt_avg","range_gt_80_avg",
-        "op_lo","op_lo_14_avg","op_lo_gt_avg","range_gt_80_op_lo",
-        "hi_op","hi_op_14_avg","hi_op_gt_avg","range_gt_80_hi_op",
-        "hit_both_80","hit_both_14_avg",
-        "range_gt_120_avg","range_gt_120_op_lo","range_gt_120_hi_op",
+        "trade_date",
+        "day",
+        "ONH > pRTH Hi",
+        "ONL < pRTH Lo",
+        "ONH 20% Ext",
+        "ONL 20% Ext",
+        "RTH Hi > ONH",
+        "RTH Lo < ONL",
+        "RTH Hi 20% Ext",
+        "RTH Lo 20% Ext",
     ]
     df = df[[c for c in keep_fixed if c in df.columns]]
 
@@ -285,6 +289,41 @@ elif choice in ["ES RTH Pivots", "ES ON Pivots"]:
 # --- Generic view-level subset ---
 if keep_cols:
     df = df[[c for c in keep_cols if c in df.columns]]
+
+# ===================== ES Range Extensions metrics (ON vs RTH) =====================
+if choice == "ES Range Extensions":
+    # Coerce bool-like strings -> bool if needed
+    for c in df.columns:
+        if df[c].dtype == object:
+            vals = df[c].dropna().astype(str).str.strip().str.lower().unique()
+            if len(vals) > 0 and set(vals).issubset({"true", "false"}):
+                df[c] = df[c].astype(str).str.strip().str.lower().map({"true": True, "false": False})
+
+    on_cols = [
+        "ONH > pRTH Hi",
+        "ONL < pRTH Lo",
+        "ONH 20% Ext",
+        "ONL 20% Ext",
+    ]
+    rth_cols = [
+        "RTH Hi > ONH",
+        "RTH Lo < ONL",
+        "RTH Hi 20% Ext",
+        "RTH Lo 20% Ext",
+    ]
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("ON Extensions")
+        for col in [c for c in on_cols if c in df.columns]:
+            pct = float(df[col].mean() * 100) if len(df) else 0.0
+            st.metric(col, f"{pct:.1f}%")
+
+    with c2:
+        st.subheader("RTH Extensions")
+        for col in [c for c in rth_cols if c in df.columns]:
+            pct = float(df[col].mean() * 100) if len(df) else 0.0
+            st.metric(col, f"{pct:.1f}%")
 
 # ---- Format numeric columns ----
 for col in df.columns:
@@ -343,7 +382,7 @@ def make_excelish_styler(df: pd.DataFrame, choice: str):
     styler = styler.set_table_styles(table_styles)
 
     bool_cols = detect_bool_like_columns(df)
-    hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit", "gt", ">"])]
+    hit_cols = [c for c in df.columns if any(s in c.lower() for s in ["hit", "gt", "lt", ">", "<", "ext"])]
     highlight_cols = sorted(set(bool_cols + hit_cols))
     if highlight_cols:
         styler = styler.map(color_hits, subset=highlight_cols)
@@ -418,7 +457,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 
 st.markdown(f'<div class="scroll-table-container">{html_table}</div>', unsafe_allow_html=True)
 
