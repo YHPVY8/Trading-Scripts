@@ -292,38 +292,48 @@ if keep_cols:
 
 # ===================== ES Range Extensions metrics (ON vs RTH) =====================
 if choice == "ES Range Extensions":
-    # Coerce bool-like strings -> bool if needed
+    # Coerce bool-like strings -> bool if needed (so mean() works)
     for c in df.columns:
         if df[c].dtype == object:
             vals = df[c].dropna().astype(str).str.strip().str.lower().unique()
             if len(vals) > 0 and set(vals).issubset({"true", "false"}):
                 df[c] = df[c].astype(str).str.strip().str.lower().map({"true": True, "false": False})
 
-    on_cols = [
-        "ONH > pRTH Hi",
-        "ONL < pRTH Lo",
-        "ONH 20% Ext",
-        "ONL 20% Ext",
-    ]
-    rth_cols = [
-        "RTH Hi > ONH",
-        "RTH Lo < ONL",
-        "RTH Hi 20% Ext",
-        "RTH Lo 20% Ext",
-    ]
+    def _pct(series: pd.Series) -> str:
+        s = series.dropna()
+        return "–" if s.empty else f"{100.0 * s.mean():.1f}%"
 
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("ON Extensions")
-        for col in [c for c in on_cols if c in df.columns]:
-            pct = float(df[col].mean() * 100) if len(df) else 0.0
-            st.metric(col, f"{pct:.1f}%")
+    def _render_block(col, title, data_dict):
+        with col:
+            st.markdown(f"### {title}")
+            for k, v in data_dict.items():
+                st.markdown(
+                    f"""
+                    <div style='padding:4px 0; margin-bottom:2px; border-bottom:1px solid #ddd;'>
+                        <strong>{k}:</strong> {v}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-    with c2:
-        st.subheader("RTH Extensions")
-        for col in [c for c in rth_cols if c in df.columns]:
-            pct = float(df[col].mean() * 100) if len(df) else 0.0
-            st.metric(col, f"{pct:.1f}%")
+    on_data = {
+        "Days": f"{len(df):,}",
+        "ONH > pRTH Hi": _pct(df["ONH > pRTH Hi"]) if "ONH > pRTH Hi" in df.columns else "–",
+        "ONL < pRTH Lo": _pct(df["ONL < pRTH Lo"]) if "ONL < pRTH Lo" in df.columns else "–",
+        "ONH 20% Ext":   _pct(df["ONH 20% Ext"])   if "ONH 20% Ext"   in df.columns else "–",
+        "ONL 20% Ext":   _pct(df["ONL 20% Ext"])   if "ONL 20% Ext"   in df.columns else "–",
+    }
+
+    rth_data = {
+        "RTH Hi > ONH":     _pct(df["RTH Hi > ONH"])     if "RTH Hi > ONH"     in df.columns else "–",
+        "RTH Lo < ONL":     _pct(df["RTH Lo < ONL"])     if "RTH Lo < ONL"     in df.columns else "–",
+        "RTH Hi 20% Ext":   _pct(df["RTH Hi 20% Ext"])   if "RTH Hi 20% Ext"   in df.columns else "–",
+        "RTH Lo 20% Ext":   _pct(df["RTH Lo 20% Ext"])   if "RTH Lo 20% Ext"   in df.columns else "–",
+    }
+
+    col_left, col_right = st.columns(2)
+    _render_block(col_left,  "ON Extensions",  on_data)
+    _render_block(col_right, "RTH Extensions", rth_data)
 
 # ---- Format numeric columns ----
 for col in df.columns:
