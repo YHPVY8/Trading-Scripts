@@ -25,7 +25,28 @@ BASE_TABLES = OrderedDict({
     "GC Daily Pivots": ("gc_daily_pivot_levels", "date"),
     "GC Weekly Pivots": ("gc_weekly_pivot_levels", "date"),
 
-    "ES Range Extensions": ("es_range_extensions", "date"),
+    # ✅ UPDATED: ES Range Extensions (new schema uses trade_date)
+    "ES Range Extensions": {
+        "table": "es_range_extensions",
+        "date_col": "trade_date",
+        "keep": [
+            "trade_date",
+            "day",
+            "ONH > pRTH Hi",
+            "ONL < pRTH Lo",
+            "ONH 20% Ext",
+            "ONL 20% Ext",
+            "RTH Hi > ONH",
+            "RTH Lo < ONL",
+            "RTH Hi 20% Ext",
+            "RTH Lo 20% Ext",
+        ],
+        "labels": {
+            "trade_date": "Date",
+            "day": "Day",
+        },
+    },
+
     "ES RTH Pivots": ("es_rth_pivot_levels", "trade_date"),
     "ES ON Pivots":  ("es_on_pivot_levels",  "trade_date"),
     "SPX Opening Range": ("spx_opening_range_stats", "trade_date"),
