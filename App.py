@@ -267,6 +267,8 @@ elif choice == "ES Range Extensions":
     keep_fixed = [
         "trade_date",
         "day",
+
+        # --- Base fields
         "ONH > pRTH Hi",
         "ONL < pRTH Lo",
         "ONH 20% Ext",
@@ -275,9 +277,17 @@ elif choice == "ES Range Extensions":
         "RTH Lo < ONL",
         "RTH Hi 20% Ext",
         "RTH Lo 20% Ext",
+
+        # --- NEW combo fields
+        "Break Either pRTH Hi/Lo",
+        "Break Both pRTH Hi/Lo",
+        "Either 20% Ext of pRTH Range",
+        "Both 20% Ext of pRTH Range",
+        "Either 20% Ext of ON Range",
+        "Both 20% Ext of ON Range",
     ]
     df = df[[c for c in keep_fixed if c in df.columns]]
-
+    
 elif choice in ["ES RTH Pivots", "ES ON Pivots"]:
     keep_cols_fixed = [
         "trade_date","day",
