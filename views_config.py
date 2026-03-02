@@ -40,6 +40,14 @@ BASE_TABLES = OrderedDict({
             "RTH Lo < ONL",
             "RTH Hi 20% Ext",
             "RTH Lo 20% Ext",
+
+            # ✅ NEW: Combo stats
+            "Break Either pRTH Hi/pRTH Lo",
+            "Break Both pRTH Hi/pRTH Lo",
+            "Break Either 20% Ext of pRTH Range",
+            "Break Both 20% Ext of pRTH Range",
+            "Break Either 20% Ext of ON Range",
+            "Break Both 20% Ext of ON Range",
         ],
         "labels": {
             "trade_date": "Date",
