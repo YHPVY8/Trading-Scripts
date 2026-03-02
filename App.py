@@ -328,17 +328,32 @@ if choice == "ES Range Extensions":
 
     on_data = {
         "Days": f"{len(df):,}",
+
+        # Base pRTH comparisons
         "ONH > pRTH Hi": _pct(df["ONH > pRTH Hi"]) if "ONH > pRTH Hi" in df.columns else "–",
         "ONL < pRTH Lo": _pct(df["ONL < pRTH Lo"]) if "ONL < pRTH Lo" in df.columns else "–",
-        "ONH 20% Ext":   _pct(df["ONH 20% Ext"])   if "ONH 20% Ext"   in df.columns else "–",
-        "ONL 20% Ext":   _pct(df["ONL 20% Ext"])   if "ONL 20% Ext"   in df.columns else "–",
+
+        # Combo: Either/Both pRTH Hi/Lo
+        "Break Either pRTH Hi/Lo": _pct(df["Break Either pRTH Hi/Lo"]) if "Break Either pRTH Hi/Lo" in df.columns else "–",
+        "Break Both pRTH Hi/Lo":   _pct(df["Break Both pRTH Hi/Lo"])   if "Break Both pRTH Hi/Lo"   in df.columns else "–",
+
+        # pRTH range extension (20%)
+        "ONH 20% Ext (pRTH rng)": _pct(df["ONH 20% Ext"]) if "ONH 20% Ext" in df.columns else "–",
+        "ONL 20% Ext (pRTH rng)": _pct(df["ONL 20% Ext"]) if "ONL 20% Ext" in df.columns else "–",
+        "Either 20% Ext of pRTH Range": _pct(df["Either 20% Ext of pRTH Range"]) if "Either 20% Ext of pRTH Range" in df.columns else "–",
+        "Both 20% Ext of pRTH Range":   _pct(df["Both 20% Ext of pRTH Range"])   if "Both 20% Ext of pRTH Range"   in df.columns else "–",
     }
 
     rth_data = {
-        "RTH Hi > ONH":     _pct(df["RTH Hi > ONH"])     if "RTH Hi > ONH"     in df.columns else "–",
-        "RTH Lo < ONL":     _pct(df["RTH Lo < ONL"])     if "RTH Lo < ONL"     in df.columns else "–",
-        "RTH Hi 20% Ext":   _pct(df["RTH Hi 20% Ext"])   if "RTH Hi 20% Ext"   in df.columns else "–",
-        "RTH Lo 20% Ext":   _pct(df["RTH Lo 20% Ext"])   if "RTH Lo 20% Ext"   in df.columns else "–",
+        # Base ON comparisons
+        "RTH Hi > ONH": _pct(df["RTH Hi > ONH"]) if "RTH Hi > ONH" in df.columns else "–",
+        "RTH Lo < ONL": _pct(df["RTH Lo < ONL"]) if "RTH Lo < ONL" in df.columns else "–",
+
+        # ON range extension (20%)
+        "RTH Hi 20% Ext (ON rng)": _pct(df["RTH Hi 20% Ext"]) if "RTH Hi 20% Ext" in df.columns else "–",
+        "RTH Lo 20% Ext (ON rng)": _pct(df["RTH Lo 20% Ext"]) if "RTH Lo 20% Ext" in df.columns else "–",
+        "Either 20% Ext of ON Range": _pct(df["Either 20% Ext of ON Range"]) if "Either 20% Ext of ON Range" in df.columns else "–",
+        "Both 20% Ext of ON Range":   _pct(df["Both 20% Ext of ON Range"])   if "Both 20% Ext of ON Range"   in df.columns else "–",
     }
 
     col_left, col_right = st.columns(2)
