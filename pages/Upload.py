@@ -30,18 +30,27 @@ def _to_iso_est(ts_str: str):
     """Keep EST wall-clock: strip trailing timezone token like '-03:00' if present; return 'YYYY-MM-DD HH:MM:SS' or None."""
     if not ts_str:
         return None
+
     s = str(ts_str).strip()
+
     parts = s.rsplit(" ", 1)
     if (
         len(parts) == 2
         and len(parts[1]) == 6
         and parts[1][3] == ":"
-        and (parts[1][0] in "+-")
+        and parts[1][0] in "+-"
     ):
         s = parts[0]
-    dt = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
+
+    dt = pd.to_datetime(
+        s,
+        format="%m/%d/%Y %H:%M:%S",
+        errors="coerce"
+    )
+
     if pd.isna(dt):
         return None
+
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
