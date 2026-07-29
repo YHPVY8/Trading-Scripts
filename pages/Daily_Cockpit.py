@@ -4,6 +4,7 @@
 from datetime import date, time
 import hashlib
 import io
+import re
 
 import pandas as pd
 import streamlit as st
@@ -103,6 +104,38 @@ def _trade_day(timestamp):
 
 def _map_columns(columns, aliases):
     return {key: next((alias for alias in options if alias in columns), None) for key, options in aliases.items()}
+
+
+def assign_trade_identifiers(trades: pd.DataFrame, source_format: str) -> pd.DataFrame:
+    """Assign stable, unique annotation IDs and sanitized widget-key suffixes."""
+    if trades.empty:
+        return trades.copy()
+    result = trades.reset_index(drop=True).copy()
+    identifiers = []
+    for chronological_index, row in result.iterrows():
+        attributes = "|".join([
+            str(source_format), str(row.get("symbol", "")), str(row.get("entry_time", "")),
+            str(row.get("exit_time", "")), str(row.get("direction", "")),
+            str(chronological_index), str(row.get("source_row_index", chronological_index)),
+        ])
+        digest = hashlib.sha1(attributes.encode("utf-8")).hexdigest()[:16]
+        identifiers.append(f"{source_format}-{chronological_index:04d}-{digest}")
+
+    # The chronological index normally guarantees uniqueness. Keep a defensive,
+    # deterministic occurrence suffix in case future formats override that input.
+    seen = {}
+    unique_identifiers = []
+    for identifier in identifiers:
+        occurrence = seen.get(identifier, 0)
+        seen[identifier] = occurrence + 1
+        unique_identifiers.append(identifier if occurrence == 0 else f"{identifier}-occ-{occurrence}")
+
+    result["trade_id"] = unique_identifiers
+    result["widget_key_suffix"] = [
+        re.sub(r"[^A-Za-z0-9_-]+", "_", identifier).strip("_")
+        for identifier in unique_identifiers
+    ]
+    return result
 
 
 def parse_platform_csv(uploaded_bytes):
@@ -267,15 +300,15 @@ def reconstruct_flat_to_flat_trades(executions: pd.DataFrame) -> pd.DataFrame:
         result["open_position"] = result["open_position"].fillna(False)
     result["weighted_entry_price"] = result["entry_value"] / result["entry_price_qty"].replace(0, pd.NA)
     result["weighted_exit_price"] = result["exit_value"] / result["exit_price_qty"].replace(0, pd.NA)
-    result["trade_id"] = result.apply(lambda row: hashlib.sha1(
-        f"{row['symbol']}|{row['direction']}|{row['entry_time']}|{row['exit_time']}".encode()
-    ).hexdigest()[:12], axis=1)
-    return result.sort_values("entry_time").reset_index(drop=True)
+    result = result.sort_values("entry_time").reset_index(drop=True)
+    return assign_trade_identifiers(result, "execution")
 
 
 def completed_trade_fallback(rows: pd.DataFrame) -> pd.DataFrame:
     """Safely preserve completed rows as trades; never infer overlapping positions."""
-    result = rows.sort_values("entry_time").reset_index(drop=True).copy()
+    result = rows.copy()
+    result["source_row_index"] = result.index
+    result = result.sort_values("entry_time").reset_index(drop=True)
     result["initial_quantity"] = result["quantity"].abs()
     result["maximum_quantity"] = result["quantity"].abs()
     result["total_bought"] = pd.NA
@@ -288,10 +321,7 @@ def completed_trade_fallback(rows: pd.DataFrame) -> pd.DataFrame:
     result["open_position"] = False
     result["crossed_session_boundary"] = False
     result["trade_day"] = result["entry_time"].map(_trade_day)
-    result["trade_id"] = result.apply(lambda row: hashlib.sha1(
-        f"{row['symbol']}|{row['direction']}|{row['entry_time']}|{row['exit_time']}".encode()
-    ).hexdigest()[:12], axis=1)
-    return result
+    return assign_trade_identifiers(result, "completed")
 
 
 def _start_session():
@@ -376,9 +406,12 @@ if started:
     if trades.empty:
         st.info("Upload a supported CSV to populate the trade log.")
     else:
+        trades = assign_trade_identifiers(trades, mode or "unknown")
+        st.session_state.daily_cockpit_trades = trades
         annotations = st.session_state.daily_cockpit_annotations
         for position, trade in trades.iterrows():
             trade_id = trade["trade_id"]
+            widget_key = trade["widget_key_suffix"]
             annotations.setdefault(trade_id, {
                 "classification": "Base hit", "classification_reviewed": False,
                 "override_enabled": False, "override_risk": default_planned_risk,
@@ -395,7 +428,7 @@ if started:
                 with class_col:
                     annotation["classification"] = st.radio(
                         "Classification", ["Base hit", "Home-run attempt"], horizontal=True,
-                        key=f"class_{trade_id}", on_change=_mark_classification_reviewed, args=(trade_id,),
+                        key=f"class_{widget_key}", on_change=_mark_classification_reviewed, args=(trade_id,),
                     )
                     if not annotation["classification_reviewed"]:
                         st.caption("Base hit is the unreviewed default")
@@ -406,19 +439,19 @@ if started:
                 card[3].metric("Net P&L", "—" if pd.isna(trade["net_pnl"]) else f"${trade['net_pnl']:,.2f}")
                 card[4].metric("Risk", "—" if risk is None else f"${risk:,.2f}")
                 card[5].metric("R", "—" if r_multiple is None else f"{r_multiple:.2f}R")
-                annotation["override_enabled"] = st.checkbox("Edit planned risk", key=f"override_{trade_id}")
+                annotation["override_enabled"] = st.checkbox("Edit planned risk", key=f"override_{widget_key}")
                 if annotation["override_enabled"]:
-                    annotation["override_risk"] = st.number_input("Trade planned risk ($)", min_value=0.0, step=25.0, value=float(annotation["override_risk"]), key=f"override_risk_{trade_id}")
+                    annotation["override_risk"] = st.number_input("Trade planned risk ($)", min_value=0.0, step=25.0, value=float(annotation["override_risk"]), key=f"override_risk_{widget_key}")
                 with st.expander("Add issue"):
                     selected = []
                     issue_cols = st.columns(2)
                     for issue_index, issue in enumerate(ISSUES):
-                        if issue_cols[issue_index % 2].checkbox(issue, key=f"issue_{trade_id}_{issue}"):
+                        if issue_cols[issue_index % 2].checkbox(issue, key=f"issue_{widget_key}_{issue}"):
                             selected.append(issue)
                     annotation["issues"] = selected
-                    add_notes = st.checkbox("Add notes", key=f"add_notes_{trade_id}")
+                    add_notes = st.checkbox("Add notes", key=f"add_notes_{widget_key}")
                     if "Other" in selected or add_notes:
-                        annotation["notes"] = st.text_area("Notes", key=f"notes_{trade_id}")
+                        annotation["notes"] = st.text_area("Notes", key=f"notes_{widget_key}")
         st.session_state.daily_cockpit_annotations = annotations
 
         st.header("3. Daily Review")
