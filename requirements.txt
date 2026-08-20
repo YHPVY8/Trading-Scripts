@@ -1,6 +1,5 @@
 streamlit>=1.32
 pandas
-supabase
+psycopg[binary]==3.2.3
 numpy
 PyYAML==6.0.2
-

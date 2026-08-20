@@ -2,13 +2,11 @@
 import json
 import streamlit as st
 import pandas as pd
-from supabase import create_client
+from trading_db import get_database
 
 st.set_page_config(page_title="Views Manager", layout="wide")
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+sb = get_database()
 
 st.title("Views Manager")
 
@@ -60,7 +58,7 @@ def load_views():
                   .data)
         return rows
     except Exception as e:
-        st.error("Could not load dashboard_views from Supabase.")
+        st.error("Could not load dashboard_views from the database.")
         return []
 
 def save_view(payload, existing_id=None):

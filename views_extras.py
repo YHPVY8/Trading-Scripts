@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-from supabase import create_client
 from datetime import date, timedelta
 import re
 from typing import Optional, List, Dict, Tuple

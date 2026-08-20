@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import streamlit as st
 import pandas as pd
-from supabase import create_client
 from typing import Optional
+from trading_db import get_database
 
 # import the tables/view builder
 from views_config import build_tables
@@ -26,9 +26,7 @@ except Exception:
 # ---- CONFIG ----
 st.set_page_config(page_title="Stats", layout="wide")
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+sb = get_database()
 
 # CHANGED: pull base tables + YAML/DB-defined views
 TABLES = build_tables(sb)

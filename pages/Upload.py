@@ -7,14 +7,12 @@ import hashlib
 
 import pandas as pd
 import streamlit as st
-from supabase import create_client
+from trading_db import get_database
 
 st.set_page_config(page_title="Upload Trades (EST)", layout="wide")
 
 # ===== CONFIG =====
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+sb = get_database()
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 # ---------- Utilities ----------
