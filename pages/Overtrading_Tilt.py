@@ -7,14 +7,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import altair as alt
-from supabase import create_client
+from trading_db import get_database
 
 # ===== CONFIG =====
 st.set_page_config(page_title="Overtrading & Tilt", layout="wide")
 
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+sb = get_database()
 USER_ID = st.secrets.get("USER_ID", "00000000-0000-0000-0000-000000000001")
 
 
@@ -67,7 +65,7 @@ def _classify_session(ts):
 
 def load_trades() -> pd.DataFrame:
     """
-    Load tj_trades for the current user from Supabase.
+    Load tj_trades for the current user from the database.
     """
     resp = (
         sb.table("tj_trades")

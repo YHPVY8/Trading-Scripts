@@ -3,7 +3,7 @@ import datetime as dt
 import pandas as pd
 import numpy as np
 import streamlit as st
-from supabase import create_client
+from trading_db import get_database
 
 # =========================
 # Page config
@@ -11,11 +11,9 @@ from supabase import create_client
 st.set_page_config(page_title="Conditions", layout="wide")
 
 # =========================
-# Supabase client
+# Database client
 # =========================
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+sb = get_database()
 
 # =========================
 # Helpers
